@@ -46,11 +46,18 @@ foreach ($c in $columns) {
         }
         Write-Host "Added column $($c.Name)"
     }
-    if ($c.Indexed) {
-        Set-PnPField -List $LibraryName -Identity $c.Name -Values @{ Indexed = $true } | Out-Null
-        Write-Host "Indexed column $($c.Name)"
-    }
+    # Required columns would leave uploaded files checked out (the file is created before its metadata is set).
+    $values = @{ Required = $false }
+    if ($c.Indexed) { $values.Indexed = $true }
+    Set-PnPField -List $LibraryName -Identity $c.Name -Values $values | Out-Null
+    Write-Host "Configured column $($c.Name) (Required=false$(if ($c.Indexed) { ', Indexed=true' }))"
 }
+
+# Library settings that break the control. Warn rather than silently change a policy someone may have set.
+$list = Get-PnPList -Identity $LibraryName
+Get-PnPProperty -ClientObject $list -Property ForceCheckout, EnableModeration | Out-Null
+if ($list.ForceCheckout) { Write-Warning "'Require check out' is ON for $LibraryName. Turn it off: uploaded files would stay checked out." }
+if ($list.EnableModeration) { Write-Warning "'Require content approval' is ON for $LibraryName. Turn it off: uploads would stay Pending." }
 
 # 3. Sites.Selected grant for the backend service principal (spec section 4.3)
 Grant-PnPAzureADAppSitePermission -AppId $BackendAppId -DisplayName $BackendAppName -Site $SiteUrl -Permissions Write | Out-Null

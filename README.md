@@ -24,6 +24,21 @@ SharePoint document grid with:
 
 ![All contact documents with preview](docs/screenshot-all-contact-documents.png)
 
+## Before you start (summary of [PREREQUISITES.md](docs/PREREQUISITES.md))
+
+- **SharePoint:** a `Contacts` library on `/sites/AdvisorManagement` with columns **`DocCategory`** (Choice: Offer Letter,
+  Commissions, Payslip, Resignation Letter, FinCEN_U4, Misc), **`SourceEntity`**, **`SourceRecordId`** and
+  **`ContactGuid`** (text). These are the exact internal names. `DocCategory`, `SourceRecordId` and `ContactGuid` are
+  indexed, and none of the four is required. Check-out and content approval must be **off**. The backend app needs
+  Sites.Selected **Write** on the site. `sharepoint/Setup-ContactsLibrary.ps1` sets this up and
+  `Test-ContactsLibrary.ps1` verifies it.
+- **Dynamics 365:** a model-driven app; Opportunity (uses the OOB `parentcontactid` lookup); an **Advisor Onboarding**
+  table with a **lookup to Contact**; the lookup placed on each main form **twice** (once editable, once with the
+  control); users need Read on Contact.
+- **Entra ID:** a backend app (`Sites.Selected` + exposed `user_impersonation` scope) and an SPA client app with a
+  redirect URI for every D365 org URL.
+- **Azure:** a Function App (Node 20, Functions v4) with Key Vault for the secret and CORS for the org URLs.
+
 ## Repository layout
 
 | Path | What |
@@ -31,7 +46,8 @@ SharePoint document grid with:
 | `pcf/` | The PCF control (React 16.14 + Fluent UI v9 platform libraries, TypeScript). Production bundle ≈ 330 KB / 80 KB gzipped, of which ≈ 284 KB is MSAL; React/Fluent are supplied by Dynamics and icons are inlined. |
 | `backend/` | Azure Function (Node 20, TypeScript) that talks to SharePoint via Microsoft Graph with an app-only, `Sites.Selected` token |
 | `sharepoint/Setup-ContactsLibrary.ps1` | PnP PowerShell: library columns, indexes, Sites.Selected grant |
-| `docs/DEPLOYMENT.md` | Step-by-step deployment (Entra, SharePoint, Function, solution, forms) |
+| `docs/PREREQUISITES.md` | **Start here.** What must exist first: SharePoint columns and settings, D365 tables, lookups and forms, Entra apps, Azure, permissions |
+| `docs/SETUP.md` | Step-by-step setup (Entra → SharePoint → Function → solution import → D365 tables and forms → smoke test) |
 | `docs/ARCHITECTURE.md`, `docs/API_SPECS.md`, `docs/PCF_STANDARDS.md`, `docs/TROUBLESHOOTING.md` | Design, contracts, coding rules and known issues |
 | `AGENTS.md` (+ `CLAUDE.md`) | Instructions for AI coding agents (Claude Code, Cursor, Copilot, Windsurf) |
 
@@ -72,4 +88,4 @@ cd backend && npm install && npm test       # backend + unit tests
 cd backend && cp local.settings.sample.json local.settings.json && npm start   # needs Azure Functions Core Tools
 ```
 
-See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for production setup.
+See **[docs/PREREQUISITES.md](docs/PREREQUISITES.md)** first, then **[docs/SETUP.md](docs/SETUP.md)**.

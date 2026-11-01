@@ -9,7 +9,8 @@ Read this file first. It is the single source of instructions for AI coding agen
 | [docs/PCF_STANDARDS.md](docs/PCF_STANDARDS.md) | Touching anything under `pcf/` |
 | [docs/API_SPECS.md](docs/API_SPECS.md) | Calling or changing an endpoint (ours or Microsoft Graph) |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | A build, packaging, auth or runtime error |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Entra, SharePoint, Azure or form setup |
+| [docs/PREREQUISITES.md](docs/PREREQUISITES.md) | What must exist in SharePoint / D365 / Entra / Azure (columns, lookups, settings, roles) |
+| [docs/SETUP.md](docs/SETUP.md) | Step-by-step setup and smoke test |
 
 ## Project overview
 
@@ -99,6 +100,7 @@ type check.
 - New backend logic that can be tested without Graph (parsing, naming, validation, auth rejection) has a test in
   `backend/test/`.
 - If you changed a contract, update `docs/API_SPECS.md`. If you changed a folder, column or flow, update
-  `docs/ARCHITECTURE.md`. If you changed a setting, update `docs/DEPLOYMENT.md`.
+  `docs/ARCHITECTURE.md`. If you changed a setting, update `docs/SETUP.md`. If you changed a SharePoint column, Dataverse requirement or
+  permission, update `docs/PREREQUISITES.md` and `sharepoint/Test-ContactsLibrary.ps1`.
 - When adding a category, update all three places: `backend/src/lib/categories.ts`, `ALL_CATEGORIES` in
-  `pcf/.../categories.ts`, and the SharePoint choice values (`sharepoint/Setup-ContactsLibrary.ps1`).
+  `pcf/.../categories.ts`, and the SharePoint choice values (`sharepoint/Setup-ContactsLibrary.ps1` and `Test-ContactsLibrary.ps1`).
