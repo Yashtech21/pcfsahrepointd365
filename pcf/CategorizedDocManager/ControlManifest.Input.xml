@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest>
+  <control namespace="EnterpriseDocManagement"
+           constructor="CategorizedDocManager"
+           version="1.0.0"
+           display-name-key="Categorized Document Manager"
+           description-key="SharePoint document manager with categorization, unified contact view and inline preview"
+           control-type="virtual">
+    <external-service-usage enabled="true">
+      <domain>login.microsoftonline.com</domain>
+    </external-service-usage>
+
+    <property name="contactLookupField" display-name-key="Contact Lookup"
+              description-key="Bound lookup pointing to the Contact (recruit) record"
+              of-type="Lookup.Simple" usage="bound" required="true" />
+
+    <property name="apiBaseUrl" display-name-key="Document API Base URL"
+              description-key="Azure Function base URL, e.g. https://d365-sp-docmanager.azurewebsites.net/api"
+              of-type="SingleLine.Text" usage="input" required="true" />
+    <property name="tenantId" display-name-key="Entra Tenant ID"
+              description-key="Microsoft Entra tenant ID (GUID)"
+              of-type="SingleLine.Text" usage="input" required="true" />
+    <property name="clientId" display-name-key="SPA Client ID"
+              description-key="Client ID of the Entra SPA app registration used to sign the user in"
+              of-type="SingleLine.Text" usage="input" required="true" />
+    <property name="apiScope" display-name-key="API Scope"
+              description-key="Scope exposed by the Function app, e.g. api://&lt;function-app-client-id&gt;/user_impersonation"
+              of-type="SingleLine.Text" usage="input" required="true" />
+    <property name="categoryConfig" display-name-key="Category Config (JSON, optional)"
+              description-key="Override categories per entity, e.g. {&quot;opportunity&quot;:[&quot;Offer Letter&quot;],&quot;*&quot;:[&quot;Payslip&quot;]}"
+              of-type="Multiple" usage="input" required="false" />
+
+    <resources>
+      <code path="index.ts" order="1" />
+      <platform-library name="React" version="16.14.0" />
+      <platform-library name="Fluent" version="9.46.2" />
+      <css path="css/CategorizedDocManager.css" order="1" />
+    </resources>
+    <feature-usage>
+      <uses-feature name="Utility" required="true" />
+      <uses-feature name="WebAPI" required="true" />
+    </feature-usage>
+  </control>
+</manifest>

@@ -1,0 +1,19 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+
+    "GRAPH_TENANT_ID": "<tenant-guid>",
+    "GRAPH_CLIENT_ID": "<D365-SP-DocManager app client id>",
+    "GRAPH_CLIENT_SECRET": "<secret - use Key Vault reference in Azure>",
+
+    "SP_HOSTNAME": "contoso.sharepoint.com",
+    "SP_SITE_PATH": "/sites/AdvisorManagement",
+    "SP_LIBRARY_NAME": "Contacts",
+
+    "ALLOWED_ORIGINS": "https://contoso.crm.dynamics.com",
+    "REQUIRE_EASY_AUTH": "true"
+  },
+  "Host": { "CORS": "https://contoso.crm.dynamics.com", "CORSCredentials": false }
+}

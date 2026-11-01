@@ -1,0 +1,31 @@
+{
+  "name": "categorized-doc-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PCF control: categorized SharePoint document manager for Dynamics 365 (Opportunity / Advisor Onboarding)",
+  "scripts": {
+    "build": "pcf-scripts build",
+    "build:prod": "pcf-scripts build --buildMode production",
+    "clean": "pcf-scripts clean",
+    "rebuild": "pcf-scripts rebuild",
+    "start": "pcf-scripts start",
+    "start:watch": "pcf-scripts start watch",
+    "refreshTypes": "pcf-scripts refreshTypes",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^3.28.0"
+  },
+  "devDependencies": {
+    "@fluentui/react-components": "9.46.2",
+    "@types/node": "^18.19.0",
+    "@types/powerapps-component-framework": "^1.3.18",
+    "@types/react": "^16.14.0",
+    "@types/react-dom": "^16.9.0",
+    "pcf-scripts": "^1",
+    "pcf-start": "^1",
+    "react": "16.14.0",
+    "react-dom": "16.14.0",
+    "typescript": "^4.9.5"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+out/
+bin/
+obj/
+dist/
+generated/
+solution/
+*.zip
+local.settings.json
+.DS_Store

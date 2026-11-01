@@ -1,0 +1,119 @@
+import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
+import { AuthError, getCaller } from "../lib/auth";
+import { folderForCategory } from "../lib/categories";
+import { config } from "../lib/config";
+import { GraphError } from "../lib/graph";
+import { isValidEntityName, normalizeGuid } from "../lib/naming";
+import * as sp from "../lib/sharepoint";
+
+type Handler = (req: HttpRequest, ctx: InvocationContext) => Promise<HttpResponseInit>;
+
+class BadRequest extends Error {}
+
+const json = (status: number, body: unknown): HttpResponseInit => ({ status, jsonBody: body });
+
+/** Shared auth + error handling for every endpoint. */
+function handler(fn: Handler): Handler {
+    return async (req, ctx) => {
+        try {
+            const caller = getCaller(req);
+            ctx.log(`${req.method} ${req.url} by ${caller.name || caller.userId}`);
+            return await fn(req, ctx);
+        } catch (e) {
+            if (e instanceof AuthError) return json(e.status, { error: e.message });
+            if (e instanceof BadRequest) return json(400, { error: e.message });
+            if (e instanceof GraphError) {
+                ctx.warn(`Graph error ${e.status} ${e.code ?? ""}: ${e.message}`);
+                const status = e.status === 404 ? 404 : e.status === 403 ? 403 : 502;
+                return json(status, { error: e.status === 404 ? "Document not found" : `SharePoint error: ${e.message}` });
+            }
+            ctx.error(e);
+            return json(500, { error: "Unexpected server error" });
+        }
+    };
+}
+
+function requireGuid(value: string | null, name: string): string {
+    const g = normalizeGuid(value);
+    if (!g) throw new BadRequest(`Query parameter ${name} must be a GUID`);
+    return g;
+}
+
+function requireItemId(req: HttpRequest): string {
+    const id = req.params.itemId ?? "";
+    if (!/^[A-Za-z0-9!_\-]+$/.test(id)) throw new BadRequest("Invalid item id");
+    return id;
+}
+
+// GET /api/documents?contactId={guid}
+app.http("listDocuments", {
+    methods: ["GET"],
+    authLevel: "anonymous", // protected by App Service Authentication, see README
+    route: "documents",
+    handler: handler(async (req) => {
+        const contactId = requireGuid(req.query.get("contactId"), "contactId");
+        return json(200, await sp.listByContact(contactId));
+    }),
+});
+
+// POST /api/documents/upload?fileName=&category=&contactId=&contactName=&sourceEntity=&sourceRecordId=
+// Body: raw file bytes.
+app.http("uploadDocument", {
+    methods: ["POST"],
+    authLevel: "anonymous",
+    route: "documents/upload",
+    handler: handler(async (req) => {
+        const q = req.query;
+        const contactId = requireGuid(q.get("contactId"), "contactId");
+        const sourceRecordId = requireGuid(q.get("sourceRecordId"), "sourceRecordId");
+        const sourceEntity = (q.get("sourceEntity") ?? "").toLowerCase();
+        if (!isValidEntityName(sourceEntity)) throw new BadRequest("Invalid sourceEntity");
+        const category = q.get("category") ?? "";
+        const categoryFolder = folderForCategory(category);
+        if (!categoryFolder) throw new BadRequest(`Unknown category "${category}"`);
+        const fileName = (q.get("fileName") ?? "").trim();
+        if (!fileName) throw new BadRequest("fileName is required");
+
+        const declared = Number(req.headers.get("content-length") ?? "0");
+        if (declared > config.maxUploadBytes) return json(413, { error: "File is too large" });
+        const content = Buffer.from(await req.arrayBuffer());
+        if (!content.length) throw new BadRequest("Empty file");
+        if (content.length > config.maxUploadBytes) return json(413, { error: "File is too large" });
+
+        const doc = await sp.uploadDocument({
+            fileName, content, category, categoryFolder, contactId,
+            contactName: q.get("contactName") ?? "", sourceEntity, sourceRecordId,
+        });
+        return json(201, doc);
+    }),
+});
+
+// POST /api/documents/{itemId}/preview -> { url }
+app.http("previewDocument", {
+    methods: ["POST"],
+    authLevel: "anonymous",
+    route: "documents/{itemId}/preview",
+    handler: handler(async (req) => {
+        const item = await sp.getItem(requireItemId(req));
+        return json(200, { url: await sp.previewUrl(item) });
+    }),
+});
+
+// GET /api/documents/{itemId}/download -> { url } (short-lived pre-authenticated URL)
+app.http("downloadDocument", {
+    methods: ["GET"],
+    authLevel: "anonymous",
+    route: "documents/{itemId}/download",
+    handler: handler(async (req) => json(200, { url: await sp.downloadUrl(requireItemId(req)) })),
+});
+
+// DELETE /api/documents/{itemId}
+app.http("deleteDocument", {
+    methods: ["DELETE"],
+    authLevel: "anonymous",
+    route: "documents/{itemId}",
+    handler: handler(async (req) => {
+        await sp.deleteItem(requireItemId(req));
+        return { status: 204 };
+    }),
+});
