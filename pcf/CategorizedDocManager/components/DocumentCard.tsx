@@ -24,6 +24,8 @@ export interface IDocumentCardProps {
     doc: IDocumentItem;
     sourceLabel: string;
     selected: boolean;
+    /** Uploaded during this session: shows a "New" indicator. */
+    isNew?: boolean;
     onPreview: (d: IDocumentItem) => void;
     onDownload: (d: IDocumentItem) => void;
     onDelete: (d: IDocumentItem) => void;
@@ -33,7 +35,7 @@ export interface IDocumentCardProps {
  * Memoized: with stable callbacks from the parent, toggling the preview or tabs re-renders only the
  * cards whose props changed (e.g. the previously and newly selected card).
  */
-export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel, selected, onPreview, onDownload, onDelete }: IDocumentCardProps) {
+export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel, selected, isNew, onPreview, onDownload, onDelete }: IDocumentCardProps) {
     const s = useStyles();
     return (
         <Card className={mergeClasses(s.card, selected && s.selected)} size="small">
@@ -47,6 +49,7 @@ export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel,
                         <Badge appearance="filled" size="medium" style={categoryColor(doc.category)}>
                             {categoryLabel(doc.category) || "Uncategorized"}
                         </Badge>
+                        {isNew && <Badge appearance="tint" color="success" size="medium" style={{ marginLeft: 4 }}>New</Badge>}
                     </div>
                     <Text className={s.meta}>Source Record: {sourceLabel}</Text>
                     <Text className={s.meta}>

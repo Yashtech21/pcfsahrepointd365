@@ -1,7 +1,21 @@
 import * as React from "react";
-import { Badge, Button, Dropdown, Field, Option, Text, makeStyles, mergeClasses, shorthands, tokens } from "@fluentui/react-components";
+import {
+    Badge, Button, Dropdown, Field, Option, ProgressBar, Text, makeStyles, mergeClasses, shorthands, tokens,
+} from "@fluentui/react-components";
 import { ArrowUploadRegular, DismissRegular, PersonRegular } from "./Icons";
 import { ICategory } from "../categories";
+import { formatSize } from "../utils";
+
+/** Overall progress of the current batch, reported by DocumentManager while uploading. */
+export interface IUploadProgress {
+    current: number;      // 1-based index of the file being sent
+    total: number;        // files in the batch
+    fileName: string;
+    sentBytes: number;    // across the whole batch
+    totalBytes: number;
+    /** "finishing" = all bytes sent; verifying and refreshing the list. */
+    phase: "sending" | "finishing";
+}
 
 const useStyles = makeStyles({
     root: { display: "flex", gap: tokens.spacingHorizontalL, alignItems: "stretch", flexWrap: "wrap" },
@@ -21,6 +35,8 @@ const useStyles = makeStyles({
         borderRadius: tokens.borderRadiusMedium,
     },
     contact: { display: "inline-flex", alignItems: "center", gap: "4px", marginBottom: "6px" },
+    summary: { marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+    progress: { flexBasis: "100%" },
 });
 
 export interface IUploadBarProps {
@@ -30,6 +46,7 @@ export interface IUploadBarProps {
     contactName: string;
     disabledReason?: string;
     busy: boolean;
+    progress?: IUploadProgress | null;
     /** Resolves with the files that failed, which stay staged so the user can retry them. */
     onUpload: (files: File[]) => Promise<File[]>;
 }
@@ -67,6 +84,9 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
     };
 
     const current = p.categories.find(c => c.value === p.category);
+    const stagedBytes = React.useMemo(() => staged.reduce((n, f) => n + f.size, 0), [staged]);
+    const pr = p.progress;
+    const fraction = pr && pr.totalBytes ? Math.min(pr.sentBytes / pr.totalBytes, 1) : undefined;
 
     return (
         <div className={s.root}>
@@ -93,6 +113,11 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
                         ))}
                     </div>
                 )}
+                {staged.length > 0 && (
+                    <Text className={s.summary} aria-live="polite">
+                        {staged.length} file{staged.length === 1 ? "" : "s"} selected · {formatSize(stagedBytes) || "0 B"}
+                    </Text>
+                )}
                 <input ref={inputRef} type="file" multiple hidden
                        onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
             </div>
@@ -113,9 +138,27 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
                     Contact: {p.contactName || "—"}
                 </Badge>
                 <Button appearance="primary" icon={<ArrowUploadRegular />} disabled={disabled} onClick={() => void upload()}>
-                    {busy ? "Uploading…" : staged.length ? `Upload (${staged.length})` : "Upload"}
+                    {busy && pr?.phase === "finishing" ? "Finishing…"
+                        : busy && pr ? `Uploading ${pr.current}/${pr.total}…` : busy ? "Uploading…"
+                        : staged.length ? `Upload (${staged.length})` : "Upload"}
                 </Button>
             </div>
+
+            {busy && pr && (
+                <Field
+                    className={s.progress}
+                    size="small"
+                    validationState="none"
+                    validationMessage={pr.phase === "finishing"
+                        ? `All ${pr.total} file${pr.total === 1 ? "" : "s"} sent · refreshing the document list…`
+                        : `Uploading ${pr.current} of ${pr.total}: ${pr.fileName} · `
+                            + `${formatSize(pr.sentBytes) || "0 B"} of ${formatSize(pr.totalBytes)}`
+                            + (fraction !== undefined ? ` (${Math.round(fraction * 100)}%)` : "")}
+                >
+                    <ProgressBar value={pr.phase === "finishing" ? undefined : fraction} thickness="large"
+                                 aria-label={pr.phase === "finishing" ? "Refreshing documents" : "Upload progress"} />
+                </Field>
+            )}
         </div>
     );
 };

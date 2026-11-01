@@ -29,3 +29,30 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<
         );
     });
 }
+
+export interface IXhrResult { status: number; statusText: string; body: string }
+
+/**
+ * Upload with byte-level progress. fetch() can't report upload progress, so this uses XMLHttpRequest,
+ * with the same timeout contract as fetchWithTimeout (rejects with TimeoutError).
+ */
+export function xhrUpload(
+    url: string,
+    opts: { headers: Record<string, string>; body: Blob; timeoutMs: number; onProgress?: (loaded: number, total: number) => void },
+): Promise<IXhrResult> {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        Object.entries(opts.headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+        xhr.timeout = opts.timeoutMs;
+        if (opts.onProgress) {
+            const report = opts.onProgress;
+            xhr.upload.onprogress = e => report(e.loaded, e.lengthComputable ? e.total : opts.body.size);
+        }
+        xhr.onload = () => resolve({ status: xhr.status, statusText: xhr.statusText, body: xhr.responseText });
+        xhr.ontimeout = () => reject(new TimeoutError(Math.round(opts.timeoutMs / 1000)));
+        xhr.onerror = () => reject(new Error("Network error while uploading"));
+        xhr.onabort = () => reject(new Error("Upload was cancelled"));
+        xhr.send(opts.body);
+    });
+}

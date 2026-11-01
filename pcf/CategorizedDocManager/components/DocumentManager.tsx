@@ -1,14 +1,15 @@
 import * as React from "react";
 import {
-    Button, Input, MessageBar, MessageBarActions, MessageBarBody, Tab, TabList, Text, makeStyles, tokens,
+    Button, CounterBadge, Input, MessageBar, MessageBarActions, MessageBarBody, ProgressBar, Tab, TabList, Text,
+    ToggleButton, makeStyles, tokens,
 } from "@fluentui/react-components";
 import { ArrowSortRegular, ArrowSyncRegular, FilterRegular, SearchRegular } from "./Icons";
 import { IDocumentItem, IHostContext } from "../types";
 import { ICategory, categoryLabel } from "../categories";
 import { DocumentApi, IPreviewTarget } from "../services/DocumentApi";
 import { TimeoutError } from "../services/http";
-import { prettifyEntityName } from "../utils";
-import { UploadBar } from "./UploadBar";
+import { formatSize, prettifyEntityName } from "../utils";
+import { IUploadProgress, UploadBar } from "./UploadBar";
 import { DocumentCard } from "./DocumentCard";
 import { PreviewPane } from "./PreviewPane";
 import { SkeletonCards } from "./SkeletonCards";
@@ -28,6 +29,11 @@ const useStyles = makeStyles({
     grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: tokens.spacingHorizontalM },
     empty: { padding: tokens.spacingVerticalXXL, textAlign: "center", color: tokens.colorNeutralForeground3 },
     footer: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: "right" },
+    tabLabel: { display: "inline-flex", alignItems: "center", gap: tokens.spacingHorizontalXS },
+    chips: { display: "flex", gap: tokens.spacingHorizontalXS, flexWrap: "wrap", alignItems: "center" },
+    chip: { minWidth: "auto" },
+    chipCount: { marginLeft: tokens.spacingHorizontalXS },
+    refreshBar: { marginTop: `-${tokens.spacingVerticalXS}` },
 });
 
 type Scope = "record" | "all";
@@ -75,6 +81,9 @@ export const DocumentManager = React.memo(function DocumentManager(
     const [toDelete, setToDelete] = React.useState<IDocumentItem | null>(null);
     const [deleting, setDeleting] = React.useState(false);
     const [displayNames, setDisplayNames] = React.useState<Record<string, string>>({});
+    const [uploadProgress, setUploadProgress] = React.useState<IUploadProgress | null>(null);
+    const [newIds, setNewIds] = React.useState<ReadonlySet<string>>(() => new Set());
+    const [categoryFilter, setCategoryFilter] = React.useState<string | null>(null);
 
     // Keep the selected category valid when the offered list changes.
     React.useEffect(() => {
@@ -131,11 +140,33 @@ export const DocumentManager = React.memo(function DocumentManager(
         return d.sourceEntity === host.entityName && d.sourceRecordId === host.recordId ? `${label} (this record)` : label;
     }, [displayNames, host.entityName, host.recordId]);
 
+    // Counts for the tab badges.
+    const recordCount = React.useMemo(
+        () => (host.recordId ? documents.filter(d => d.sourceRecordId === host.recordId).length : 0),
+        [documents, host.recordId]);
+
+    // Documents in the active tab, before the category/text filters.
+    const scopeDocs = React.useMemo(
+        () => (scope === "record" ? documents.filter(d => d.sourceRecordId === host.recordId) : documents),
+        [documents, scope, host.recordId]);
+
+    // Per-category counts within the active tab (for the filter chips), largest first.
+    const categoryCounts = React.useMemo(() => {
+        const m = new Map<string, number>();
+        scopeDocs.forEach(d => m.set(d.category, (m.get(d.category) ?? 0) + 1));
+        return Array.from(m.entries()).sort((a, b) => b[1] - a[1] || categoryLabel(a[0]).localeCompare(categoryLabel(b[0])));
+    }, [scopeDocs]);
+
+    // Drop a category filter that no longer matches anything in this tab.
+    React.useEffect(() => {
+        if (categoryFilter !== null && !categoryCounts.some(([c]) => c === categoryFilter)) setCategoryFilter(null);
+    }, [categoryCounts, categoryFilter]);
+
     // Filtering/sorting runs only when its inputs change; opening a preview doesn't redo it.
     const displayed = React.useMemo(() => {
         const q = filter.trim().toLowerCase();
-        const list = documents.filter(d => {
-            if (scope === "record" && d.sourceRecordId !== host.recordId) return false;
+        const list = scopeDocs.filter(d => {
+            if (categoryFilter !== null && d.category !== categoryFilter) return false;
             if (!q) return true;
             return d.name.toLowerCase().includes(q)
                 || categoryLabel(d.category).toLowerCase().includes(q)
@@ -149,7 +180,9 @@ export const DocumentManager = React.memo(function DocumentManager(
                 default: return (new Date(a.uploadDate).getTime() - new Date(b.uploadDate).getTime()) * dir;
             }
         });
-    }, [documents, scope, filter, sort, host.recordId, sourceLabel]);
+    }, [scopeDocs, categoryFilter, filter, sort, sourceLabel]);
+
+    const displayedBytes = React.useMemo(() => displayed.reduce((n, d) => n + (d.size || 0), 0), [displayed]);
 
     const toggleSort = React.useCallback((key: SortKey) =>
         setSort(prev => (prev.key === key ? { key, asc: !prev.asc } : { key, asc: key !== "date" })), []);
@@ -158,22 +191,31 @@ export const DocumentManager = React.memo(function DocumentManager(
         if (!api) return files;
         setUploading(true); setError(null); setInfo(null);
         const startedAt = Date.now();
+        const totalBytes = files.reduce((n, f) => n + f.size, 0);
+        let doneBytes = 0;
+        const uploadedIds: string[] = [];
         const failed: File[] = [];
         const timedOut = new Set<File>();
         const messages = new Map<File, string>();
-        for (const file of files) {
+        for (const [i, file] of files.entries()) {
+            const base = doneBytes;
+            setUploadProgress({ current: i + 1, total: files.length, fileName: file.name, sentBytes: base, totalBytes, phase: "sending" });
             try {
-                await api.upload({
+                const created = await api.upload({
                     file, category,
                     contactId: host.contactId, contactName: host.contactName,
                     sourceEntity: host.entityName, sourceRecordId: host.recordId,
-                });
+                }, (loaded) => setUploadProgress(p => (p ? { ...p, sentBytes: base + Math.min(loaded, file.size) } : p)));
+                if (created?.id) uploadedIds.push(created.id);
             } catch (e) {
                 failed.push(file);
                 if (e instanceof TimeoutError) timedOut.add(file);
                 messages.set(file, `${file.name} (${(e as Error).message})`);
             }
+            doneBytes += file.size;
         }
+        setUploadProgress(p => (p ? { ...p, sentBytes: totalBytes, phase: "finishing" } : p));
+        if (uploadedIds.length) setNewIds(prev => new Set([...prev, ...uploadedIds]));
 
         let stillFailed = failed;
         if (failed.length < files.length || timedOut.size) {
@@ -183,6 +225,7 @@ export const DocumentManager = React.memo(function DocumentManager(
                 stillFailed = failed.filter(f => !(timedOut.has(f) && landedDespiteTimeout(f, docs, host.recordId, startedAt)));
             }
         }
+        setUploadProgress(null);
         setUploading(false);
         const succeeded = files.length - stillFailed.length;
         if (stillFailed.length) {
@@ -257,7 +300,7 @@ export const DocumentManager = React.memo(function DocumentManager(
             <UploadBar
                 categories={categories} category={category} onCategoryChange={setCategory}
                 contactName={host.contactName} disabledReason={uploadDisabledReason}
-                busy={uploading} onUpload={handleUpload}
+                busy={uploading} progress={uploadProgress} onUpload={handleUpload}
             />
 
             {loadError && (
@@ -272,8 +315,21 @@ export const DocumentManager = React.memo(function DocumentManager(
             {info && <MessageBar intent="success"><MessageBarBody>{info}</MessageBarBody></MessageBar>}
 
             <TabList selectedValue={scope} onTabSelect={(_, d) => setScope(d.value as Scope)}>
-                <Tab value="record" disabled={!host.recordId}>This Record's Documents ({entityLabel})</Tab>
-                <Tab value="all">All Contact Documents ({host.contactName || "no contact"})</Tab>
+                <Tab value="record" disabled={!host.recordId}
+                     aria-label={`This Record's Documents (${entityLabel}), ${recordCount} documents`}>
+                    <span className={s.tabLabel}>
+                        This Record's Documents ({entityLabel})
+                        {!firstLoad && host.recordId && <CounterBadge count={recordCount} showZero size="small"
+                            appearance={scope === "record" ? "filled" : "ghost"} color={scope === "record" ? "brand" : "informative"} />}
+                    </span>
+                </Tab>
+                <Tab value="all" aria-label={`All Contact Documents (${host.contactName || "no contact"}), ${documents.length} documents`}>
+                    <span className={s.tabLabel}>
+                        All Contact Documents ({host.contactName || "no contact"})
+                        {!firstLoad && host.contactId && <CounterBadge count={documents.length} showZero size="small"
+                            appearance={scope === "all" ? "filled" : "ghost"} color={scope === "all" ? "brand" : "informative"} />}
+                    </span>
+                </Tab>
             </TabList>
 
             <div className={s.workspace}>
@@ -292,6 +348,25 @@ export const DocumentManager = React.memo(function DocumentManager(
                         <Button size="small" appearance="subtle" icon={<ArrowSyncRegular />} title="Refresh" disabled={loading}
                                 onClick={() => void loadDocs()} />
                     </div>
+                    {loading && !firstLoad && <ProgressBar className={s.refreshBar} thickness="medium" aria-label="Refreshing documents" />}
+
+                    {categoryCounts.length > 1 && (
+                        <div className={s.chips} role="group" aria-label="Filter by category">
+                            <ToggleButton size="small" shape="circular" className={s.chip}
+                                          checked={categoryFilter === null} onClick={() => setCategoryFilter(null)}>
+                                All<CounterBadge className={s.chipCount} count={scopeDocs.length} showZero size="small" appearance="ghost" />
+                            </ToggleButton>
+                            {categoryCounts.map(([cat, n]) => (
+                                <ToggleButton key={cat || "_none"} size="small" shape="circular" className={s.chip}
+                                              checked={categoryFilter === cat}
+                                              onClick={() => setCategoryFilter(f => (f === cat ? null : cat))}>
+                                    {categoryLabel(cat) || "Uncategorized"}
+                                    <CounterBadge className={s.chipCount} count={n} size="small" appearance="ghost" />
+                                </ToggleButton>
+                            ))}
+                        </div>
+                    )}
+
                     {filterOpen && (
                         <Input size="small" contentBefore={<SearchRegular />} placeholder="Filter by name, category or source"
                                value={filter} onChange={(_, d) => setFilter(d.value)} autoFocus />
@@ -301,20 +376,31 @@ export const DocumentManager = React.memo(function DocumentManager(
                         <SkeletonCards gridClassName={s.grid} />
                     ) : displayed.length === 0 ? (
                         <div className={s.empty}>
-                            {!host.contactId ? "No contact selected." : loadError ? "Documents could not be loaded." : "No documents found."}
+                            {!host.contactId ? "No contact selected."
+                                : loadError ? "Documents could not be loaded."
+                                : scopeDocs.length ? "No documents match the current filters."
+                                : "No documents found."}
                         </div>
                     ) : (
                         <div className={s.grid} aria-busy={loading}>
                             {displayed.map(d => (
                                 <DocumentCard key={d.id} doc={d} sourceLabel={sourceLabel(d)}
                                               selected={preview?.doc.id === d.id}
+                                              isNew={newIds.has(d.id)}
                                               onPreview={onPreviewCard}
                                               onDownload={onDownloadCard}
                                               onDelete={onDeleteCard} />
                             ))}
                         </div>
                     )}
-                    <Text className={s.footer}>{displayed.length} item(s)</Text>
+                    {!firstLoad && (
+                        <Text className={s.footer} aria-live="polite">
+                            {displayed.length === scopeDocs.length
+                                ? `${displayed.length} item${displayed.length === 1 ? "" : "s"}`
+                                : `Showing ${displayed.length} of ${scopeDocs.length} items`}
+                            {displayedBytes ? ` · ${formatSize(displayedBytes)}` : ""}
+                        </Text>
+                    )}
                 </div>
 
                 {preview && (

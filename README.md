@@ -11,6 +11,9 @@ SharePoint document grid with:
 - **Delete with explicit confirmation**: a dialog shows the file, category and source, and the user must tick
   "I understand…" before Delete is enabled. The server also requires the confirmed file name
   (`X-Confirm-Delete`) and refuses to delete folders.
+- **Indicators & counts**: document counts on both tabs, category filter chips with counts, "Showing X of Y · size"
+  in the footer, per-byte upload progress ("Uploading 2 of 3 · 45%"), a refresh bar, and "New" badges on files just
+  uploaded.
 - **Resilient loading**: card skeletons while loading, timeouts on every call with a Retry banner, and duplicate
   calls are skipped while Dynamics repeatedly calls `updateView`. Upload is locked on the first click.
 - Drag-and-drop multi-file upload. Large files use resumable Graph upload sessions that retry throttling and resume

@@ -1,6 +1,6 @@
 import { IDocumentItem } from "../types";
 import { AuthService } from "./AuthService";
-import { fetchWithTimeout } from "./http";
+import { fetchWithTimeout, xhrUpload } from "./http";
 
 export interface IPreviewTarget {
     url: string;
@@ -55,7 +55,8 @@ export class DocumentApi {
         return p;
     }
 
-    public upload(req: IUploadRequest): Promise<IDocumentItem> {
+    /** `onProgress` receives bytes sent / total for this file. */
+    public async upload(req: IUploadRequest, onProgress?: (loaded: number, total: number) => void): Promise<IDocumentItem> {
         const q = new URLSearchParams({
             fileName: req.file.name,
             category: req.category,
@@ -64,11 +65,19 @@ export class DocumentApi {
             sourceEntity: req.sourceEntity,
             sourceRecordId: req.sourceRecordId,
         });
-        return this.call<IDocumentItem>(`/documents/upload?${q.toString()}`, {
-            method: "POST",
-            headers: { "Content-Type": req.file.type || "application/octet-stream" },
+        const token = await this.auth.getToken();
+        const res = await xhrUpload(`${this.baseUrl}/documents/upload?${q.toString()}`, {
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": req.file.type || "application/octet-stream" },
             body: req.file,
-        }, uploadTimeoutMs(req.file.size));
+            timeoutMs: uploadTimeoutMs(req.file.size),
+            onProgress,
+        });
+        let parsed: unknown;
+        try { parsed = JSON.parse(res.body); } catch { parsed = undefined; }
+        if (res.status < 200 || res.status >= 300) {
+            throw new Error((parsed as { error?: string } | undefined)?.error ?? `${res.status} ${res.statusText || "Upload failed"}`);
+        }
+        return parsed as IDocumentItem;
     }
 
     public previewTarget(itemId: string): Promise<IPreviewTarget> {

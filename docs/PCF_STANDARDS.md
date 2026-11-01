@@ -71,6 +71,25 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
 - **Download:** ask the API for the short-lived `downloadUrl`, then click a temporary `<a>`. Never link the
   SharePoint `webUrl` as the download.
 
+## 5a. Indicators and counts
+
+Every indicator is derived with `useMemo` from state that already exists. Don't add extra fetches to compute counts.
+
+| Indicator | Where | Source |
+|---|---|---|
+| Tab counts (`CounterBadge`) | Both tabs. Hidden during first load | `recordCount`, `documents.length` |
+| Category chips with counts (`ToggleButton` + `CounterBadge`) | Above the grid when the tab has 2+ categories; click to filter, click again to clear | `categoryCounts` (from `scopeDocs`) |
+| "N items · size" / "Showing X of Y items · size" | Grid footer (`aria-live`) | `displayed`, `scopeDocs`, `displayedBytes` |
+| Staged summary "N files selected · size" | Drop zone | `staged` in `UploadBar` |
+| Upload progress bar + "Uploading i of n: name · sent of total (pct)" | Under the upload bar; button shows `Uploading i/n…`, then `Finishing…` while the list refreshes | `IUploadProgress` from `xhrUpload` progress events |
+| Refresh bar (indeterminate `ProgressBar`) | Under the grid header on reloads (not first load, which uses skeletons) | `loading && !firstLoad` |
+| "New" badge | Cards uploaded in this session | `newIds` |
+| "Deleting…" | Delete dialog button | `deleting` |
+
+Uploads use `xhrUpload` (`services/http.ts`) because `fetch` can't report upload progress. It keeps the same
+timeout contract (rejects with `TimeoutError`). Counts include all files in the scope, not just the filtered ones.
+Chip counts follow the active tab.
+
 ## 6. Testing the UI
 
 `npm start watch` runs the PCF harness, but the harness has no backend or MSAL, so you'll only see the
