@@ -16,15 +16,16 @@ const json = (status: number, body: unknown): HttpResponseInit => ({ status, jso
 function handler(fn: Handler): Handler {
     return async (req, ctx) => {
         try {
-            const caller = getCaller(req);
+            const caller = await getCaller(req);
             ctx.log(`${req.method} ${req.url} by ${caller.name || caller.userId}`);
             return await fn(req, ctx);
         } catch (e) {
             if (e instanceof AuthError) return json(e.status, { error: e.message });
-            if (e instanceof BadRequest) return json(400, { error: e.message });
+            if (e instanceof BadRequest || e instanceof sp.NotAFileError) return json(400, { error: e.message });
+            if (e instanceof sp.DeleteNotConfirmedError) return json(409, { error: e.message });
             if (e instanceof GraphError) {
                 ctx.warn(`Graph error ${e.status} ${e.code ?? ""}: ${e.message}`);
-                const status = e.status === 404 ? 404 : e.status === 403 ? 403 : 502;
+                const status = e.status === 404 ? 404 : e.status === 403 ? 403 : e.status === 504 ? 504 : 502;
                 return json(status, { error: e.status === 404 ? "Document not found" : `SharePoint error: ${e.message}` });
             }
             ctx.error(e);
@@ -108,12 +109,18 @@ app.http("downloadDocument", {
 });
 
 // DELETE /api/documents/{itemId}
+// Header X-Confirm-Delete: <url-encoded file name the user confirmed>. Files only; folders are refused.
 app.http("deleteDocument", {
     methods: ["DELETE"],
     authLevel: "anonymous",
     route: "documents/{itemId}",
-    handler: handler(async (req) => {
-        await sp.deleteItem(requireItemId(req));
+    handler: handler(async (req, ctx) => {
+        const itemId = requireItemId(req);
+        let confirmed = "";
+        try { confirmed = decodeURIComponent(req.headers.get("x-confirm-delete") ?? ""); } catch { /* malformed */ }
+        if (!confirmed) throw new BadRequest("Missing X-Confirm-Delete header");
+        await sp.deleteFile(itemId, confirmed);
+        ctx.log(`Deleted document ${itemId} (${confirmed})`);
         return { status: 204 };
     }),
 });

@@ -56,16 +56,23 @@ Function App (Node 20, Functions v4) **App settings**:
 | `SP_HOSTNAME` | `contoso.sharepoint.com` |
 | `SP_SITE_PATH` | `/sites/AdvisorManagement` |
 | `SP_LIBRARY_NAME` | `Contacts` |
-| `REQUIRE_EASY_AUTH` | `true` |
+| `API_AUDIENCE` | `api://<D365-SP-DocManager client id>,<D365-SP-DocManager client id>` (accepted token audiences) |
+| `REQUIRE_AUTH` | `true` (set `false` only for local development) |
+| `GRAPH_TIMEOUT_MS` | *(optional, default 30000)* per-request Graph timeout |
 | `REQUIRED_ROLE` | *(optional)* `DocManager.User` |
 | `MAX_UPLOAD_MB` | *(optional, default 100)* |
 
-**Authentication** (Function App → Authentication):
+**Authentication.** The Function verifies every caller's Entra ID bearer token itself (signature, issuer,
+audience, expiry, tenant, optional role), so it stays secure even if the platform setting below is missing.
+Enabling App Service Authentication is still recommended as a second layer
+(Function App → Authentication):
 - Add identity provider **Microsoft**, pick the existing `D365-SP-DocManager` registration.
 - *Allowed token audiences*: `api://<D365-SP-DocManager client id>`.
 - *Unauthenticated requests*: **HTTP 401**.
 
 **CORS** (Function App → CORS): add every D365 org URL, e.g. `https://contoso.crm.dynamics.com`.
+The control sends `Authorization` and `X-Confirm-Delete` headers. Platform CORS allows all request headers, but if
+you put API Management or a proxy in front, allow both.
 
 ## 4. PCF control (`/pcf`)
 
@@ -104,7 +111,9 @@ On the **Opportunity** and **Advisor Onboarding** main forms:
 | Symptom | Cause / fix |
 |---|---|
 | Popup asking to sign in each session | Third-party cookies blocked or SPA redirect URI missing for this org URL. |
-| `401` from the API | Easy Auth audience doesn't match the scope configured in the control. |
+| `401 Invalid or expired token` | `API_AUDIENCE` (or Easy Auth audience) doesn't match the scope configured in the control. |
+| "did not respond within N seconds" banner | Network/Graph stall; use **Retry**. Client timeout is 8s (15s for preview, longer for uploads); backend Graph timeout is `GRAPH_TIMEOUT_MS`. |
+| `409 Delete was not confirmed` | The file was renamed after the list loaded; refresh and delete again. |
 | `403 Caller lacks the required role` | User isn't assigned the `DocManager.User` app role. |
 | `SharePoint error: Access denied` | Sites.Selected grant missing (re-run step 2). |
 | Documents uploaded directly in SharePoint don't appear | They lack `ContactGuid`; fill the column in SharePoint. |

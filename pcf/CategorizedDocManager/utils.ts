@@ -2,10 +2,12 @@ export function normalizeGuid(id?: string | null): string {
     return (id ?? "").replace(/[{}]/g, "").toLowerCase();
 }
 
-/** "ce_advisor_onboarding" -> "Advisor Onboarding" */
+/**
+ * Fallback label used only until (or if) the entity's display name loads from metadata.
+ * It does not guess at publisher prefixes: "advisor_onboarding" -> "Advisor Onboarding".
+ */
 export function prettifyEntityName(logicalName: string): string {
-    const stripped = logicalName.replace(/^[a-z0-9]{2,8}_/, (m) => (logicalName === "opportunity" ? m : ""));
-    return stripped
+    return logicalName
         .split("_")
         .filter(Boolean)
         .map(w => w.charAt(0).toUpperCase() + w.slice(1))

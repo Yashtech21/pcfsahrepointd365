@@ -13,7 +13,9 @@
     "SP_LIBRARY_NAME": "Contacts",
 
     "ALLOWED_ORIGINS": "https://contoso.crm.dynamics.com",
-    "REQUIRE_EASY_AUTH": "true"
+    "API_AUDIENCE": "api://<D365-SP-DocManager app client id>,<D365-SP-DocManager app client id>",
+    "REQUIRE_AUTH": "true",
+    "GRAPH_TIMEOUT_MS": "30000"
   },
   "Host": { "CORS": "https://contoso.crm.dynamics.com", "CORSCredentials": false }
 }

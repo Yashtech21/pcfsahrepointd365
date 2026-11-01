@@ -2,7 +2,7 @@ import * as React from "react";
 import { FluentProvider, webLightTheme, Theme } from "@fluentui/react-components";
 import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import { DocumentManager } from "./components/DocumentManager";
-import { categoriesFor } from "./categories";
+import { categoriesFor, ICategory } from "./categories";
 import { AuthService } from "./services/AuthService";
 import { DocumentApi } from "./services/DocumentApi";
 import { IHostContext } from "./types";
@@ -10,45 +10,67 @@ import { normalizeGuid, prettifyEntityName } from "./utils";
 
 interface IContextInfo { entityId?: string; entityTypeName?: string }
 
+/**
+ * Dynamics calls updateView many times while a form loads and on every field change. Everything
+ * handed to React here is cached and only replaced when its inputs actually change, so the
+ * component tree sees stable props and doesn't refetch or re-render needlessly.
+ */
 export class CategorizedDocManager implements ComponentFramework.ReactControl<IInputs, IOutputs> {
     private context!: ComponentFramework.Context<IInputs>;
-    private notifyOutputChanged!: () => void;
     private api: DocumentApi | null = null;
     private apiKey = "";
-    private entityDisplayName = "";
-    private userPrincipalName: string | undefined;
+    private categories: ICategory[] = [];
+    private categoriesKey = "";
+    private host: IHostContext | null = null;
+    private userPrincipalName!: Promise<string | undefined>;
+    private displayNames = new Map<string, Promise<string>>();
 
-    public init(context: ComponentFramework.Context<IInputs>, notifyOutputChanged: () => void): void {
+    public init(context: ComponentFramework.Context<IInputs>): void {
         this.context = context;
-        this.notifyOutputChanged = notifyOutputChanged;
-
-        const { entityTypeName } = this.contextInfo(context);
-        if (entityTypeName) {
-            context.utils.getEntityMetadata(entityTypeName)
-                .then(m => { this.entityDisplayName = (m as { DisplayName?: string }).DisplayName ?? ""; this.notifyOutputChanged(); })
-                .catch(() => { /* fall back to prettified logical name */ });
-        }
-        // The user's UPN is used as an MSAL login hint so silent SSO picks the right account.
-        context.webAPI.retrieveRecord("systemuser", context.userSettings.userId.replace(/[{}]/g, ""), "?$select=domainname")
-            .then(u => { this.userPrincipalName = (u as { domainname?: string }).domainname; })
-            .catch(() => { /* login hint is optional */ });
+        // The user's UPN is an MSAL login hint so silent SSO picks the right account. Resolved once.
+        this.userPrincipalName = context.webAPI
+            .retrieveRecord("systemuser", context.userSettings.userId.replace(/[{}]/g, ""), "?$select=domainname")
+            .then(u => (u as { domainname?: string }).domainname || undefined)
+            .catch(() => undefined);
     }
+
+    /** Cached per entity; passed to React, which stores the result in state (re-renders itself). */
+    private getEntityDisplayName = (logicalName: string): Promise<string> => {
+        let p = this.displayNames.get(logicalName);
+        if (!p) {
+            p = this.context.utils.getEntityMetadata(logicalName)
+                .then(m => (m as { DisplayName?: string }).DisplayName || prettifyEntityName(logicalName))
+                .catch(() => prettifyEntityName(logicalName));
+            this.displayNames.set(logicalName, p);
+        }
+        return p;
+    };
 
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
         this.context = context;
         const p = context.parameters;
-        const { entityId, entityTypeName } = this.contextInfo(context);
+        const { entityId, entityTypeName } = (context.mode as unknown as { contextInfo?: IContextInfo }).contextInfo ?? {};
         const entityName = (entityTypeName ?? "").toLowerCase();
 
         const lookup = p.contactLookupField.raw?.[0];
-        const host: IHostContext = {
+        const next: IHostContext = {
             entityName,
-            entityDisplayName: this.entityDisplayName || prettifyEntityName(entityName) || "Record",
+            entityDisplayName: prettifyEntityName(entityName) || "Record",
             recordId: normalizeGuid(entityId),
             contactId: normalizeGuid(lookup?.id),
             contactName: lookup?.name ?? "",
-            userPrincipalName: this.userPrincipalName,
         };
+        const h = this.host;
+        if (!h || h.entityName !== next.entityName || h.recordId !== next.recordId
+            || h.contactId !== next.contactId || h.contactName !== next.contactName) {
+            this.host = next;
+        }
+
+        const catKey = `${entityName}|${p.categoryConfig.raw ?? ""}`;
+        if (catKey !== this.categoriesKey) {
+            this.categoriesKey = catKey;
+            this.categories = categoriesFor(entityName, p.categoryConfig.raw);
+        }
 
         const cfg = {
             apiBaseUrl: (p.apiBaseUrl.raw ?? "").trim(),
@@ -60,11 +82,14 @@ export class CategorizedDocManager implements ComponentFramework.ReactControl<II
         let configError: string | undefined;
         if (missing.length) {
             configError = `Categorized Document Manager is not configured. Missing: ${missing.join(", ")}.`;
+            this.api = null;
+            this.apiKey = "";
         } else {
-            const key = JSON.stringify(cfg) + (this.userPrincipalName ?? "");
-            if (!this.api || key !== this.apiKey) {
+            const key = JSON.stringify(cfg);
+            if (key !== this.apiKey) {
                 this.apiKey = key;
-                this.api = new DocumentApi(cfg.apiBaseUrl, new AuthService(cfg.tenantId, cfg.clientId, cfg.apiScope, this.userPrincipalName));
+                this.api = new DocumentApi(cfg.apiBaseUrl,
+                    new AuthService(cfg.tenantId, cfg.clientId, cfg.apiScope, this.userPrincipalName));
             }
         }
 
@@ -73,10 +98,11 @@ export class CategorizedDocManager implements ComponentFramework.ReactControl<II
             FluentProvider,
             { theme, className: "categorized-doc-manager" },
             React.createElement(DocumentManager, {
-                host,
-                categories: categoriesFor(entityName, p.categoryConfig.raw),
-                api: configError ? null : this.api,
+                host: this.host!,
+                categories: this.categories,
+                api: this.api,
                 configError,
+                getEntityDisplayName: this.getEntityDisplayName,
             }),
         );
     }
@@ -87,9 +113,5 @@ export class CategorizedDocManager implements ComponentFramework.ReactControl<II
 
     public destroy(): void {
         this.api = null;
-    }
-
-    private contextInfo(context: ComponentFramework.Context<IInputs>): IContextInfo {
-        return ((context.mode as unknown as { contextInfo?: IContextInfo }).contextInfo) ?? {};
     }
 }

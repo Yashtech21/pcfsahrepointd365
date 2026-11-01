@@ -1,20 +1,20 @@
 /**
- * Category -> SharePoint folder mapping (relative to the contact root folder).
- * The value of `value` is what gets written to the DocCategory choice column.
+ * Categories the control can offer. `value` is written to the DocCategory choice column.
+ * Folder placement is decided server-side (backend/src/lib/categories.ts), which is the source of
+ * truth: a new category must be added there first, then here.
  */
 export interface ICategory {
     value: string;
     label: string;
-    folder: string;
 }
 
 export const ALL_CATEGORIES: Record<string, ICategory> = {
-    "Offer Letter": { value: "Offer Letter", label: "Offer Letter", folder: "Offer Letters" },
-    Commissions: { value: "Commissions", label: "Commissions", folder: "Commissions" },
-    Payslip: { value: "Payslip", label: "Payslip", folder: "Onboarding Documents/Payslips" },
-    "Resignation Letter": { value: "Resignation Letter", label: "Resignation Letter", folder: "Onboarding Documents/Resignation Letters" },
-    FinCEN_U4: { value: "FinCEN_U4", label: "FinCEN / U4 Verification", folder: "Onboarding Documents/FinCEN_U4" },
-    Misc: { value: "Misc", label: "Miscellaneous", folder: "Miscellaneous" },
+    "Offer Letter": { value: "Offer Letter", label: "Offer Letter" },
+    Commissions: { value: "Commissions", label: "Commissions" },
+    Payslip: { value: "Payslip", label: "Payslip" },
+    "Resignation Letter": { value: "Resignation Letter", label: "Resignation Letter" },
+    FinCEN_U4: { value: "FinCEN_U4", label: "FinCEN / U4 Verification" },
+    Misc: { value: "Misc", label: "Miscellaneous" },
 };
 
 const DEFAULT_BY_ENTITY: Record<string, string[]> = {
@@ -32,7 +32,13 @@ export function categoriesFor(entityName: string, overrideJson?: string | null):
         }
     }
     const keys = map[entityName.toLowerCase()] ?? map["*"];
-    return keys.map(k => ALL_CATEGORIES[k] ?? { value: k, label: k, folder: k });
+    const unknown = keys.filter(k => !ALL_CATEGORIES[k]);
+    if (unknown.length) {
+        // The server would reject uploads for these, so don't offer them.
+        console.warn(`CategorizedDocManager: ignoring unknown categories in categoryConfig: ${unknown.join(", ")}`);
+    }
+    const result = keys.filter(k => ALL_CATEGORIES[k]).map(k => ALL_CATEGORIES[k]);
+    return result.length ? result : (DEFAULT_BY_ENTITY[entityName.toLowerCase()] ?? DEFAULT_BY_ENTITY["*"]).map(k => ALL_CATEGORIES[k]);
 }
 
 export function categoryLabel(value: string): string {

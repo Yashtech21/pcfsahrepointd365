@@ -26,6 +26,7 @@ interface DriveItem {
 
 const SMALL_UPLOAD_LIMIT = 4 * 1024 * 1024;
 const CHUNK_SIZE = 16 * 320 * 1024; // 5 MiB, must be a multiple of 320 KiB
+const CHUNK_TIMEOUT_MS = 120000;
 const FIELDS = "DocCategory,SourceEntity,SourceRecordId,ContactGuid";
 
 let targetPromise: Promise<Target> | null = null;
@@ -136,7 +137,14 @@ export async function uploadDocument(input: UploadInput): Promise<DocumentDto> {
         SourceRecordId: input.sourceRecordId,
         ContactGuid: input.contactId,
     };
-    await graph(`/drives/${driveId}/items/${item.id}/listItem/fields`, { method: "PATCH", json: fields });
+    try {
+        await graph(`/drives/${driveId}/items/${item.id}/listItem/fields`, { method: "PATCH", json: fields });
+    } catch (e) {
+        // Without ContactGuid the file would be invisible to the control and a retry would create a
+        // renamed duplicate, so roll the upload back before reporting the failure.
+        await graph(`/drives/${driveId}/items/${item.id}`, { method: "DELETE" }).catch(() => undefined);
+        throw e;
+    }
     return toDto(item, fields);
 }
 
@@ -151,6 +159,7 @@ async function uploadLarge(driveId: string, path: string, content: Buffer): Prom
         // uploadUrl is pre-authenticated: it must NOT receive the bearer token.
         const res = await fetch(session.uploadUrl, {
             method: "PUT",
+            signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS),
             headers: { "Content-Length": String(end - start), "Content-Range": `bytes ${start}-${end - 1}/${total}` },
             body: new Uint8Array(content.subarray(start, end)),
         });
@@ -190,6 +199,7 @@ export async function getItem(itemId: string): Promise<DriveItem> {
 
 /** Short-lived embeddable preview URL (Graph driveItem: preview). */
 export async function previewUrl(item: DriveItem): Promise<string> {
+    if (!item.file) throw new NotAFileError("Only files can be previewed");
     const { driveId } = await getTarget();
     const body = isOfficeFile(item.name) ? { viewer: "office", chromeless: true } : {};
     const r = await graph<{ getUrl?: string }>(`/drives/${driveId}/items/${item.id}/preview`, { method: "POST", json: body });
@@ -205,7 +215,20 @@ export async function downloadUrl(itemId: string): Promise<string> {
     return url;
 }
 
-export async function deleteItem(itemId: string): Promise<void> {
+export class NotAFileError extends Error {}
+export class DeleteNotConfirmedError extends Error {}
+
+/**
+ * Deletes a single file (it goes to the SharePoint recycle bin). Folders are never deleted through
+ * the API, and the caller must echo the file name it confirmed, so a stale or forged id cannot
+ * remove a different item.
+ */
+export async function deleteFile(itemId: string, confirmedName: string): Promise<void> {
     const { driveId } = await getTarget();
-    await graph(`/drives/${driveId}/items/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+    const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}?$select=id,name,file,folder`);
+    if (!item.file || item.folder) throw new NotAFileError("Only files can be deleted");
+    if (!confirmedName || confirmedName !== item.name) {
+        throw new DeleteNotConfirmedError("Delete was not confirmed for this file");
+    }
+    await graph(`/drives/${driveId}/items/${item.id}`, { method: "DELETE" });
 }

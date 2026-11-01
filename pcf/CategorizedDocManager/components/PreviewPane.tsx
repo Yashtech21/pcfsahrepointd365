@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Button, Spinner, Text, makeStyles, tokens } from "@fluentui/react-components";
+import { Button, Text, makeStyles, tokens } from "@fluentui/react-components";
+import { SkeletonPreview } from "./SkeletonCards";
 import { DismissRegular, OpenRegular } from "./Icons";
 import { IDocumentItem } from "../types";
 
@@ -43,7 +44,7 @@ export const PreviewPane: React.FC<IPreviewPaneProps> = ({ doc, url, error, onCl
                 <iframe className={s.frame} src={url} title={`Preview of ${doc.name}`}
                         sandbox="allow-scripts allow-same-origin allow-popups allow-forms" />
             ) : (
-                <div className={s.center}><Spinner label="Loading preview…" /></div>
+                <SkeletonPreview />
             )}
         </aside>
     );

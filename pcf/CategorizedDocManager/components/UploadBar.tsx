@@ -30,7 +30,8 @@ export interface IUploadBarProps {
     contactName: string;
     disabledReason?: string;
     busy: boolean;
-    onUpload: (files: File[]) => Promise<void>;
+    /** Resolves with the files that failed, which stay staged so the user can retry them. */
+    onUpload: (files: File[]) => Promise<File[]>;
 }
 
 export const UploadBar: React.FC<IUploadBarProps> = (p) => {
@@ -38,7 +39,12 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
     const inputRef = React.useRef<HTMLInputElement>(null);
     const [dragging, setDragging] = React.useState(false);
     const [staged, setStaged] = React.useState<File[]>([]);
-    const disabled = !!p.disabledReason || p.busy;
+    const [submitting, setSubmitting] = React.useState(false);
+    // A ref, not state: it flips synchronously, so a fast double-click can't start a second upload
+    // before React re-renders the disabled button.
+    const submittingRef = React.useRef(false);
+    const busy = p.busy || submitting;
+    const disabled = !!p.disabledReason || busy;
 
     const addFiles = (list: FileList | null) => {
         if (!list || disabled) return;
@@ -47,9 +53,17 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
     };
 
     const upload = async () => {
+        if (submittingRef.current || disabled) return;
         if (!staged.length) { inputRef.current?.click(); return; }
-        await p.onUpload(staged);
-        setStaged([]);
+        submittingRef.current = true;
+        setSubmitting(true);
+        try {
+            const failed = await p.onUpload(staged);
+            setStaged(failed);
+        } finally {
+            submittingRef.current = false;
+            setSubmitting(false);
+        }
     };
 
     const current = p.categories.find(c => c.value === p.category);
@@ -72,7 +86,7 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
                     <div className={s.staged} onClick={e => e.stopPropagation()}>
                         {staged.map(f => (
                             <Badge key={f.name + f.size} appearance="tint" shape="rounded"
-                                   icon={<DismissRegular onClick={() => setStaged(staged.filter(x => x !== f))} />}
+                                   icon={<DismissRegular onClick={() => !busy && setStaged(prev => prev.filter(x => x !== f))} />}
                                    iconPosition="after">
                                 {f.name}
                             </Badge>
@@ -99,7 +113,7 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
                     Contact: {p.contactName || "—"}
                 </Badge>
                 <Button appearance="primary" icon={<ArrowUploadRegular />} disabled={disabled} onClick={() => void upload()}>
-                    {p.busy ? "Uploading…" : staged.length ? `Upload (${staged.length})` : "Upload"}
+                    {busy ? "Uploading…" : staged.length ? `Upload (${staged.length})` : "Upload"}
                 </Button>
             </div>
         </div>

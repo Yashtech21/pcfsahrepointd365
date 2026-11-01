@@ -54,3 +54,14 @@ test("toDto maps fields and defaults the source to contact root", () => {
     assert.equal(dto.fileType, "pdf");
     assert.equal(dto.category, "FinCEN_U4");
 });
+
+import { retryDelayMs } from "../src/lib/graph";
+
+test("retryDelayMs handles seconds, HTTP-dates and junk", () => {
+    assert.equal(retryDelayMs("5", 0), 5000);
+    assert.equal(retryDelayMs("120", 0), 30000); // capped
+    const now = Date.parse("2026-11-01T00:00:00Z");
+    assert.equal(retryDelayMs("Sun, 01 Nov 2026 00:00:07 GMT", 0, now), 7000);
+    assert.equal(retryDelayMs("garbage", 2), 4000); // exponential fallback, never NaN
+    assert.equal(retryDelayMs(null, 1), 2000);
+});

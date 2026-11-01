@@ -29,7 +29,11 @@ export interface IDocumentCardProps {
     onDelete: (d: IDocumentItem) => void;
 }
 
-export const DocumentCard: React.FC<IDocumentCardProps> = ({ doc, sourceLabel, selected, onPreview, onDownload, onDelete }) => {
+/**
+ * Memoized: with stable callbacks from the parent, toggling the preview or tabs re-renders only the
+ * cards whose props changed (e.g. the previously and newly selected card).
+ */
+export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel, selected, onPreview, onDownload, onDelete }: IDocumentCardProps) {
     const s = useStyles();
     return (
         <Card className={mergeClasses(s.card, selected && s.selected)} size="small">
@@ -57,4 +61,4 @@ export const DocumentCard: React.FC<IDocumentCardProps> = ({ doc, sourceLabel, s
             </CardFooter>
         </Card>
     );
-};
+});

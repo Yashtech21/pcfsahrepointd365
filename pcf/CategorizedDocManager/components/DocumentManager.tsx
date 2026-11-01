@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
-    Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, Input,
-    MessageBar, MessageBarBody, Spinner, Tab, TabList, Text, makeStyles, tokens,
+    Button, Input, MessageBar, MessageBarActions, MessageBarBody, Tab, TabList, Text, makeStyles, tokens,
 } from "@fluentui/react-components";
 import { ArrowSortRegular, ArrowSyncRegular, FilterRegular, SearchRegular } from "./Icons";
 import { IDocumentItem, IHostContext } from "../types";
@@ -11,6 +10,8 @@ import { prettifyEntityName } from "../utils";
 import { UploadBar } from "./UploadBar";
 import { DocumentCard } from "./DocumentCard";
 import { PreviewPane } from "./PreviewPane";
+import { SkeletonCards } from "./SkeletonCards";
+import { DeleteDialog } from "./DeleteDialog";
 
 const useStyles = makeStyles({
     root: {
@@ -30,19 +31,24 @@ const useStyles = makeStyles({
 
 type Scope = "record" | "all";
 type SortKey = "name" | "category" | "date";
+interface IPreviewState { doc: IDocumentItem; url: string | null; error: string | null }
 
 export interface IDocumentManagerProps {
     host: IHostContext;
     categories: ICategory[];
     api: DocumentApi | null;
     configError?: string;
+    getEntityDisplayName: (logicalName: string) => Promise<string>;
 }
 
-export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categories, api, configError }) => {
+export const DocumentManager = React.memo(function DocumentManager(
+    { host, categories, api, configError, getEntityDisplayName }: IDocumentManagerProps,
+) {
     const s = useStyles();
     const [scope, setScope] = React.useState<Scope>(host.recordId ? "record" : "all");
     const [documents, setDocuments] = React.useState<IDocumentItem[]>([]);
     const [loading, setLoading] = React.useState(false);
+    const [loadError, setLoadError] = React.useState<string | null>(null);
     const [uploading, setUploading] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
     const [info, setInfo] = React.useState<string | null>(null);
@@ -50,35 +56,65 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
     const [sort, setSort] = React.useState<{ key: SortKey; asc: boolean }>({ key: "date", asc: false });
     const [filterOpen, setFilterOpen] = React.useState(false);
     const [filter, setFilter] = React.useState("");
-    const [preview, setPreview] = React.useState<{ doc: IDocumentItem; url: string | null; error: string | null } | null>(null);
+    const [preview, setPreview] = React.useState<IPreviewState | null>(null);
     const [toDelete, setToDelete] = React.useState<IDocumentItem | null>(null);
+    const [deleting, setDeleting] = React.useState(false);
+    const [displayNames, setDisplayNames] = React.useState<Record<string, string>>({});
 
+    // Keep the selected category valid when the offered list changes.
     React.useEffect(() => {
-        if (!categories.some(c => c.value === category)) setCategory(categories[0]?.value ?? "");
+        setCategory(c => (categories.some(x => x.value === c) ? c : categories[0]?.value ?? ""));
     }, [categories]);
 
+    // A new record gets an id after its first save: switch to its own documents at that point.
+    const prevRecordId = React.useRef(host.recordId);
+    React.useEffect(() => {
+        if (!prevRecordId.current && host.recordId) setScope("record");
+        prevRecordId.current = host.recordId;
+    }, [host.recordId]);
+
+    // Resolve display names (from Dataverse metadata) for the host entity and every source entity shown.
+    React.useEffect(() => {
+        const wanted = new Set([host.entityName, ...documents.map(d => d.sourceEntity)]);
+        wanted.delete(""); wanted.delete("contact");
+        let cancelled = false;
+        wanted.forEach(name => {
+            if (displayNames[name]) return;
+            void getEntityDisplayName(name).then(label => {
+                if (!cancelled) setDisplayNames(prev => (prev[name] === label ? prev : { ...prev, [name]: label }));
+            });
+        });
+        return () => { cancelled = true; };
+    }, [host.entityName, documents, getEntityDisplayName]);
+
+    const entityLabel = displayNames[host.entityName] ?? host.entityDisplayName;
+
+    // Only the latest request for the current contact may update state (guards against out-of-order
+    // responses when the lookup changes quickly). Identical concurrent requests share one call in DocumentApi.
+    const requestSeq = React.useRef(0);
     const loadDocs = React.useCallback(async () => {
-        if (!api || !host.contactId) { setDocuments([]); return; }
-        setLoading(true); setError(null);
+        const seq = ++requestSeq.current;
+        if (!api || !host.contactId) { setDocuments([]); setLoading(false); return; }
+        setLoading(true); setLoadError(null);
         try {
-            setDocuments(await api.listByContact(host.contactId));
+            const docs = await api.listByContact(host.contactId);
+            if (seq === requestSeq.current) setDocuments(docs);
         } catch (e) {
-            setError(`Could not load documents: ${(e as Error).message}`);
+            if (seq === requestSeq.current) setLoadError(`Could not load documents: ${(e as Error).message}`);
         } finally {
-            setLoading(false);
+            if (seq === requestSeq.current) setLoading(false);
         }
     }, [api, host.contactId]);
 
     React.useEffect(() => { void loadDocs(); }, [loadDocs]);
 
-    const sourceLabel = (d: IDocumentItem): string => {
+    const sourceLabel = React.useCallback((d: IDocumentItem): string => {
         if (!d.sourceEntity || d.sourceEntity === "contact") return "Contact (Root)";
-        if (d.sourceEntity === host.entityName) {
-            return d.sourceRecordId === host.recordId ? `${host.entityDisplayName} (this record)` : host.entityDisplayName;
-        }
-        return prettifyEntityName(d.sourceEntity);
-    };
+        const label = displayNames[d.sourceEntity] ?? prettifyEntityName(d.sourceEntity);
+        return d.sourceEntity === host.entityName && d.sourceRecordId === host.recordId ? `${label} (this record)` : label;
+    }, [displayNames, host.entityName, host.recordId]);
 
+    // Filtering/sorting runs only when its inputs change; opening a preview doesn't redo it.
     const displayed = React.useMemo(() => {
         const q = filter.trim().toLowerCase();
         const list = documents.filter(d => {
@@ -96,15 +132,16 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
                 default: return (new Date(a.uploadDate).getTime() - new Date(b.uploadDate).getTime()) * dir;
             }
         });
-    }, [documents, scope, filter, sort, host.recordId, host.entityName]);
+    }, [documents, scope, filter, sort, host.recordId, sourceLabel]);
 
-    const toggleSort = (key: SortKey) =>
-        setSort(prev => (prev.key === key ? { key, asc: !prev.asc } : { key, asc: key !== "date" }));
+    const toggleSort = React.useCallback((key: SortKey) =>
+        setSort(prev => (prev.key === key ? { key, asc: !prev.asc } : { key, asc: key !== "date" })), []);
 
-    const handleUpload = async (files: File[]) => {
-        if (!api) return;
+    const handleUpload = React.useCallback(async (files: File[]): Promise<File[]> => {
+        if (!api) return files;
         setUploading(true); setError(null); setInfo(null);
-        const failed: string[] = [];
+        const failed: File[] = [];
+        const messages: string[] = [];
         for (const file of files) {
             try {
                 await api.upload({
@@ -113,16 +150,18 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
                     sourceEntity: host.entityName, sourceRecordId: host.recordId,
                 });
             } catch (e) {
-                failed.push(`${file.name} (${(e as Error).message})`);
+                failed.push(file);
+                messages.push(`${file.name} (${(e as Error).message})`);
             }
         }
         setUploading(false);
-        if (failed.length) setError(`Upload failed: ${failed.join("; ")}`);
+        if (failed.length) setError(`Upload failed for ${failed.length} file(s), still selected so you can retry: ${messages.join("; ")}`);
         else setInfo(`${files.length} file(s) uploaded as "${categoryLabel(category)}".`);
-        await loadDocs();
-    };
+        if (failed.length < files.length) await loadDocs();
+        return failed;
+    }, [api, category, host, loadDocs]);
 
-    const openPreview = async (doc: IDocumentItem) => {
+    const openPreview = React.useCallback(async (doc: IDocumentItem) => {
         if (!api) return;
         setPreview({ doc, url: null, error: null });
         try {
@@ -131,9 +170,9 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
         } catch (e) {
             setPreview(p => (p && p.doc.id === doc.id ? { ...p, error: `Preview unavailable: ${(e as Error).message}` } : p));
         }
-    };
+    }, [api]);
 
-    const download = async (doc: IDocumentItem) => {
+    const download = React.useCallback(async (doc: IDocumentItem) => {
         if (!api) return;
         try {
             const url = await api.downloadUrl(doc.id);
@@ -143,21 +182,29 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
         } catch (e) {
             setError(`Download failed: ${(e as Error).message}`);
         }
-    };
+    }, [api]);
 
-    const confirmDelete = async () => {
-        if (!api || !toDelete) return;
-        const doc = toDelete;
-        setToDelete(null);
+    const onPreviewCard = React.useCallback((d: IDocumentItem) => void openPreview(d), [openPreview]);
+    const onDownloadCard = React.useCallback((d: IDocumentItem) => void download(d), [download]);
+    const onDeleteCard = React.useCallback((d: IDocumentItem) => setToDelete(d), []);
+    const closePreview = React.useCallback(() => setPreview(null), []);
+    const cancelDelete = React.useCallback(() => setToDelete(null), []);
+
+    const confirmDelete = React.useCallback(async (doc: IDocumentItem) => {
+        if (!api || deleting) return;
+        setDeleting(true); setError(null); setInfo(null);
         try {
-            await api.remove(doc.id);
-            if (preview?.doc.id === doc.id) setPreview(null);
+            await api.remove(doc.id, doc.name);
+            setPreview(p => (p?.doc.id === doc.id ? null : p));
+            setDocuments(prev => prev.filter(d => d.id !== doc.id));
             setInfo(`"${doc.name}" deleted.`);
-            await loadDocs();
         } catch (e) {
             setError(`Delete failed: ${(e as Error).message}`);
+        } finally {
+            setDeleting(false);
+            setToDelete(null);
         }
-    };
+    }, [api, deleting]);
 
     if (configError) {
         return <MessageBar intent="warning"><MessageBarBody>{configError}</MessageBarBody></MessageBar>;
@@ -167,6 +214,7 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
         ? "Select a contact on this form to manage documents."
         : !host.recordId ? "Save this record before uploading documents." : undefined;
     const sortIcon = (k: SortKey) => (sort.key === k ? (sort.asc ? " ↑" : " ↓") : "");
+    const firstLoad = loading && documents.length === 0;
 
     return (
         <div className={s.root}>
@@ -178,11 +226,19 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
                 busy={uploading} onUpload={handleUpload}
             />
 
+            {loadError && (
+                <MessageBar intent="error">
+                    <MessageBarBody>{loadError}</MessageBarBody>
+                    <MessageBarActions>
+                        <Button size="small" icon={<ArrowSyncRegular />} disabled={loading} onClick={() => void loadDocs()}>Retry</Button>
+                    </MessageBarActions>
+                </MessageBar>
+            )}
             {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             {info && <MessageBar intent="success"><MessageBarBody>{info}</MessageBarBody></MessageBar>}
 
             <TabList selectedValue={scope} onTabSelect={(_, d) => setScope(d.value as Scope)}>
-                <Tab value="record" disabled={!host.recordId}>This Record's Documents ({host.entityDisplayName})</Tab>
+                <Tab value="record" disabled={!host.recordId}>This Record's Documents ({entityLabel})</Tab>
                 <Tab value="all">All Contact Documents ({host.contactName || "no contact"})</Tab>
             </TabList>
 
@@ -192,34 +248,35 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
                         <Text className={s.gridHeaderTitle}>
                             {scope === "all"
                                 ? `Documents related to ${host.contactName || "the contact"} across all records`
-                                : `Documents uploaded from this ${host.entityDisplayName.toLowerCase()}`}
+                                : `Documents uploaded from this ${entityLabel.toLowerCase()}`}
                         </Text>
                         <Button size="small" appearance="subtle" icon={<ArrowSortRegular />} onClick={() => toggleSort("name")}>File Name{sortIcon("name")}</Button>
                         <Button size="small" appearance="subtle" icon={<ArrowSortRegular />} onClick={() => toggleSort("category")}>Category{sortIcon("category")}</Button>
                         <Button size="small" appearance="subtle" icon={<ArrowSortRegular />} onClick={() => toggleSort("date")}>Date{sortIcon("date")}</Button>
                         <Button size="small" appearance={filterOpen ? "primary" : "subtle"} icon={<FilterRegular />} title="Filter"
                                 onClick={() => { setFilterOpen(!filterOpen); if (filterOpen) setFilter(""); }} />
-                        <Button size="small" appearance="subtle" icon={<ArrowSyncRegular />} title="Refresh" onClick={() => void loadDocs()} />
+                        <Button size="small" appearance="subtle" icon={<ArrowSyncRegular />} title="Refresh" disabled={loading}
+                                onClick={() => void loadDocs()} />
                     </div>
                     {filterOpen && (
                         <Input size="small" contentBefore={<SearchRegular />} placeholder="Filter by name, category or source"
                                value={filter} onChange={(_, d) => setFilter(d.value)} autoFocus />
                     )}
 
-                    {loading ? (
-                        <Spinner label="Loading documents…" />
+                    {firstLoad ? (
+                        <SkeletonCards gridClassName={s.grid} />
                     ) : displayed.length === 0 ? (
                         <div className={s.empty}>
-                            {host.contactId ? "No documents found." : "No contact selected."}
+                            {!host.contactId ? "No contact selected." : loadError ? "Documents could not be loaded." : "No documents found."}
                         </div>
                     ) : (
-                        <div className={s.grid}>
+                        <div className={s.grid} aria-busy={loading}>
                             {displayed.map(d => (
                                 <DocumentCard key={d.id} doc={d} sourceLabel={sourceLabel(d)}
                                               selected={preview?.doc.id === d.id}
-                                              onPreview={doc => void openPreview(doc)}
-                                              onDownload={doc => void download(doc)}
-                                              onDelete={setToDelete} />
+                                              onPreview={onPreviewCard}
+                                              onDownload={onDownloadCard}
+                                              onDelete={onDeleteCard} />
                             ))}
                         </div>
                     )}
@@ -227,24 +284,17 @@ export const DocumentManager: React.FC<IDocumentManagerProps> = ({ host, categor
                 </div>
 
                 {preview && (
-                    <PreviewPane doc={preview.doc} url={preview.url} error={preview.error} onClose={() => setPreview(null)} />
+                    <PreviewPane doc={preview.doc} url={preview.url} error={preview.error} onClose={closePreview} />
                 )}
             </div>
 
-            <Dialog open={!!toDelete} onOpenChange={(_, d) => { if (!d.open) setToDelete(null); }}>
-                <DialogSurface>
-                    <DialogBody>
-                        <DialogTitle>Delete document?</DialogTitle>
-                        <DialogContent>
-                            “{toDelete?.name}” will be moved to the SharePoint recycle bin.
-                        </DialogContent>
-                        <DialogActions>
-                            <Button appearance="secondary" onClick={() => setToDelete(null)}>Cancel</Button>
-                            <Button appearance="primary" onClick={() => void confirmDelete()}>Delete</Button>
-                        </DialogActions>
-                    </DialogBody>
-                </DialogSurface>
-            </Dialog>
+            <DeleteDialog
+                doc={toDelete}
+                sourceLabel={toDelete ? sourceLabel(toDelete) : ""}
+                deleting={deleting}
+                onCancel={cancelDelete}
+                onConfirm={d => void confirmDelete(d)}
+            />
         </div>
     );
-};
+});

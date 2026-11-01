@@ -4,6 +4,23 @@ import { config } from "./config";
 const GRAPH = "https://graph.microsoft.com/v1.0";
 let credential: ClientSecretCredential | null = null;
 
+const REQUEST_TIMEOUT_MS = Number(process.env.GRAPH_TIMEOUT_MS || "30000");
+const MAX_RETRY_WAIT_MS = 30000;
+
+/**
+ * Retry-After may be delta-seconds or an HTTP-date. Anything unparsable falls back to
+ * exponential backoff so a throttled call never retries instantly.
+ */
+export function retryDelayMs(header: string | null, attempt: number, now = Date.now()): number {
+    const fallback = 2 ** attempt * 1000;
+    if (!header) return fallback;
+    const seconds = Number(header);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
+    const date = Date.parse(header);
+    if (Number.isFinite(date)) return Math.min(Math.max(date - now, 0), MAX_RETRY_WAIT_MS);
+    return fallback;
+}
+
 export class GraphError extends Error {
     constructor(public status: number, message: string, public code?: string) { super(message); }
 }
@@ -28,10 +45,18 @@ export async function graph<T = unknown>(pathOrUrl: string, init: RequestInit & 
     }
 
     for (let attempt = 0; ; attempt++) {
-        const res = await fetch(url, { ...init, headers, body });
+        let res: Response;
+        try {
+            res = await fetch(url, { ...init, headers, body, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+        } catch (e) {
+            if ((e as Error).name === "TimeoutError") {
+                if (attempt < 2) continue;
+                throw new GraphError(504, `Microsoft Graph did not respond within ${REQUEST_TIMEOUT_MS / 1000}s`, "timeout");
+            }
+            throw e;
+        }
         if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < 4) {
-            const wait = Number(res.headers.get("Retry-After") ?? 2 ** attempt) * 1000;
-            await new Promise(r => setTimeout(r, Math.min(wait, 30000)));
+            await new Promise(r => setTimeout(r, retryDelayMs(res.headers.get("Retry-After"), attempt)));
             continue;
         }
         if (!res.ok) {
