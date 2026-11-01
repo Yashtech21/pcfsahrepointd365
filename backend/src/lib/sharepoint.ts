@@ -203,7 +203,7 @@ export async function previewUrl(item: DriveItem): Promise<string> {
     const { driveId } = await getTarget();
     const body = isOfficeFile(item.name) ? { viewer: "office", chromeless: true } : {};
     const r = await graph<{ getUrl?: string }>(`/drives/${driveId}/items/${item.id}/preview`, { method: "POST", json: body });
-    if (!r.getUrl) throw new Error("Preview is not available for this file type");
+    if (!r.getUrl) throw new NotAFileError("Preview is not available for this file type");
     return r.getUrl;
 }
 
@@ -211,10 +211,11 @@ export async function downloadUrl(itemId: string): Promise<string> {
     const { driveId } = await getTarget();
     const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}`);
     const url = item["@microsoft.graph.downloadUrl"];
-    if (!url) throw new Error("Item is not a downloadable file");
+    if (!item.file || !url) throw new NotAFileError("Item is not a downloadable file");
     return url;
 }
 
+/** The item exists but the operation doesn't apply to it (folder, or no preview/download). Mapped to 400. */
 export class NotAFileError extends Error {}
 export class DeleteNotConfirmedError extends Error {}
 
