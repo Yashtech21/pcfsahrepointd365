@@ -17,6 +17,7 @@ const useStyles = makeStyles({
     name: { fontWeight: tokens.fontWeightSemibold, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
     meta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
     footer: { gap: 0 },
+    newBadge: { marginLeft: tokens.spacingHorizontalXS },
     action: { minWidth: "auto", paddingLeft: "4px", paddingRight: "6px" },
 });
 
@@ -49,7 +50,7 @@ export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel,
                         <Badge appearance="filled" size="medium" style={categoryColor(doc.category)}>
                             {categoryLabel(doc.category) || "Uncategorized"}
                         </Badge>
-                        {isNew && <Badge appearance="tint" color="success" size="medium" style={{ marginLeft: 4 }}>New</Badge>}
+                        {isNew && <Badge className={s.newBadge} appearance="tint" color="success" size="medium">New</Badge>}
                     </div>
                     <Text className={s.meta}>Source Record: {sourceLabel}</Text>
                     <Text className={s.meta}>

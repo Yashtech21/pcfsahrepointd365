@@ -51,7 +51,9 @@ The **browser never calls Microsoft Graph or SharePoint directly**. All Graph ac
 3. **Memoize.** Filtering and sorting go in `React.useMemo`. Handlers passed to cards go in `React.useCallback`.
    `DocumentCard` and `DocumentManager` are `React.memo`. Keep it that way.
 4. **Every network call has a timeout, and retries must not duplicate files.** Browser: `fetchWithTimeout` /
-   `withTimeout` (`pcf/.../services/http.ts`), never bare `fetch`. Backend: Graph calls go through `graph()`
+   `withTimeout` (`pcf/.../services/http.ts`), never bare `fetch`. File uploads use `xhrUpload` (same file), which is
+   the only allowed upload transport: it gives byte progress and the same timeout contract. Don't switch uploads
+   back to `fetch` and don't add other raw `XMLHttpRequest` calls. Backend: Graph calls go through `graph()`
    (`graph.ts`) and upload-session traffic through `uploadToSession()` (`uploadSession.ts`), which also times out the
    cancel request. Only idempotent requests are retried after ambiguous failures (`retryDecision`). Timeouts surface
    as a message with Retry, never an endless spinner. Timeout values are named constants; see PCF_STANDARDS §4 and

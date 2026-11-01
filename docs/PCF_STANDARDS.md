@@ -77,13 +77,13 @@ Every indicator is derived with `useMemo` from state that already exists. Don't 
 
 | Indicator | Where | Source |
 |---|---|---|
-| Tab counts (`CounterBadge`) | Both tabs. Hidden during first load | `recordCount`, `documents.length` |
+| Tab counts (`CounterBadge`) | Both tabs. Shown only once the **current** contact's list has loaded (`countsReady`), never during loading or after a failed load | `recordDocs.length`, `documents.length` |
 | Category chips with counts (`ToggleButton` + `CounterBadge`) | Above the grid when the tab has 2+ categories; click to filter, click again to clear | `categoryCounts` (from `scopeDocs`) |
-| "N items · size" / "Showing X of Y items · size" | Grid footer (`aria-live`) | `displayed`, `scopeDocs`, `displayedBytes` |
+| "N items · size" / "Showing X of Y items · size" | Grid footer. Screen readers get a separate hidden live region, debounced (`useDebounced`, 600 ms) so typing in the filter doesn't flood announcements | `displayed`, `scopeDocs`, `displayedBytes` |
 | Staged summary "N files selected · size" | Drop zone | `staged` in `UploadBar` |
-| Upload progress bar + "Uploading i of n: name · sent of total (pct)" | Under the upload bar; button shows `Uploading i/n…`, then `Finishing…` while the list refreshes | `IUploadProgress` from `xhrUpload` progress events |
-| Refresh bar (indeterminate `ProgressBar`) | Under the grid header on reloads (not first load, which uses skeletons) | `loading && !firstLoad` |
-| "New" badge | Cards uploaded in this session | `newIds` |
+| Upload progress bar + "Uploading i of n: name · sent of total (pct)" | Under the upload bar; button shows `Uploading i/n…`, then `Finishing…` ("k of n uploaded") while the list refreshes. Only successfully uploaded bytes count, and the bar steps back if a file fails. No finishing phase when nothing uploaded | `IUploadProgress` from `xhrUpload` progress events |
+| Refresh bar (indeterminate `ProgressBar`) | Under the grid header on reloads (not first load, which uses skeletons). It sits in a fixed-height slot, so the layout never shifts | `loading && !firstLoad` |
+| "New" badge | Cards uploaded in this session, including timed-out uploads that turned out to have landed | `newIds` |
 | "Deleting…" | Delete dialog button | `deleting` |
 
 Uploads use `xhrUpload` (`services/http.ts`) because `fetch` can't report upload progress. It keeps the same

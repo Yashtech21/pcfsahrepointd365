@@ -13,8 +13,10 @@ export interface IUploadProgress {
     fileName: string;
     sentBytes: number;    // across the whole batch
     totalBytes: number;
-    /** "finishing" = all bytes sent; verifying and refreshing the list. */
+    /** "finishing" = sending is over; refreshing the list. */
     phase: "sending" | "finishing";
+    /** Files that uploaded successfully (set in the finishing phase). */
+    uploaded?: number;
 }
 
 const useStyles = makeStyles({
@@ -150,7 +152,7 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
                     size="small"
                     validationState="none"
                     validationMessage={pr.phase === "finishing"
-                        ? `All ${pr.total} file${pr.total === 1 ? "" : "s"} sent · refreshing the document list…`
+                        ? `${pr.uploaded ?? 0} of ${pr.total} file${pr.total === 1 ? "" : "s"} uploaded · refreshing the document list…`
                         : `Uploading ${pr.current} of ${pr.total}: ${pr.fileName} · `
                             + `${formatSize(pr.sentBytes) || "0 B"} of ${formatSize(pr.totalBytes)}`
                             + (fraction !== undefined ? ` (${Math.round(fraction * 100)}%)` : "")}

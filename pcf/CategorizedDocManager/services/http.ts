@@ -45,13 +45,19 @@ export function xhrUpload(
         xhr.open("POST", url);
         Object.entries(opts.headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
         xhr.timeout = opts.timeoutMs;
-        if (opts.onProgress) {
-            const report = opts.onProgress;
-            xhr.upload.onprogress = e => report(e.loaded, e.lengthComputable ? e.total : opts.body.size);
-        }
+        let sent = 0;
+        xhr.upload.onprogress = e => {
+            sent = e.loaded;
+            opts.onProgress?.(e.loaded, e.lengthComputable ? e.total : opts.body.size);
+        };
         xhr.onload = () => resolve({ status: xhr.status, statusText: xhr.statusText, body: xhr.responseText });
         xhr.ontimeout = () => reject(new TimeoutError(Math.round(opts.timeoutMs / 1000)));
-        xhr.onerror = () => reject(new Error("Network error while uploading"));
+        xhr.onerror = () => reject(new Error(sent > 0 && sent < opts.body.size
+            // The server closed the connection mid-send: typically it rejected the request early
+            // (e.g. file too large) before reading the whole body.
+            ? `The connection was closed after ${Math.round((sent / opts.body.size) * 100)}% of the file was sent. `
+              + "The file may be larger than the server allows, or the network dropped."
+            : "Network error while uploading"));
         xhr.onabort = () => reject(new Error("Upload was cancelled"));
         xhr.send(opts.body);
     });

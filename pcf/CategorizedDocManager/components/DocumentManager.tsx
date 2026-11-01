@@ -33,7 +33,12 @@ const useStyles = makeStyles({
     chips: { display: "flex", gap: tokens.spacingHorizontalXS, flexWrap: "wrap", alignItems: "center" },
     chip: { minWidth: "auto" },
     chipCount: { marginLeft: tokens.spacingHorizontalXS },
-    refreshBar: { marginTop: `-${tokens.spacingVerticalXS}` },
+    // Always rendered with a fixed height so showing/hiding the refresh bar never shifts the layout.
+    refreshSlot: { height: "2px", marginTop: `calc(-1 * ${tokens.spacingVerticalXS})` },
+    srOnly: {
+        position: "absolute", width: "1px", height: "1px", overflow: "hidden",
+        clip: "rect(0 0 0 0)", whiteSpace: "nowrap",
+    },
 });
 
 type Scope = "record" | "all";
@@ -45,13 +50,23 @@ interface IPreviewState { doc: IDocumentItem; target: IPreviewTarget | null; err
  * uploaded if a matching document (same size, this record, recent, same base name allowing for
  * SharePoint's " 1" rename suffix) now exists, so a retry doesn't create a duplicate.
  */
-function landedDespiteTimeout(file: File, docs: IDocumentItem[], recordId: string, startedAt: number): boolean {
+function landedDespiteTimeout(file: File, docs: IDocumentItem[], recordId: string, startedAt: number): IDocumentItem | undefined {
     // "Offer Letter.pdf" vs stored "Offer Letter 1.pdf" / sanitised "Offer_Letter.pdf" -> "offerletter"
     const key = (n: string) => n.replace(/\.[^.]+$/, "").replace(/ \d+$/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
-    return docs.some(d => d.size === file.size
+    return docs.find(d => d.size === file.size
         && d.sourceRecordId === recordId
         && new Date(d.uploadDate).getTime() >= startedAt - 60000
         && key(d.name) === key(file.name));
+}
+
+/** Returns `value` once it has stopped changing for `ms` (used to calm screen-reader announcements). */
+function useDebounced<T>(value: T, ms: number): T {
+    const [settled, setSettled] = React.useState(value);
+    React.useEffect(() => {
+        const t = window.setTimeout(() => setSettled(value), ms);
+        return () => window.clearTimeout(t);
+    }, [value, ms]);
+    return settled;
 }
 
 export interface IDocumentManagerProps {
@@ -84,6 +99,10 @@ export const DocumentManager = React.memo(function DocumentManager(
     const [uploadProgress, setUploadProgress] = React.useState<IUploadProgress | null>(null);
     const [newIds, setNewIds] = React.useState<ReadonlySet<string>>(() => new Set());
     const [categoryFilter, setCategoryFilter] = React.useState<string | null>(null);
+    /** Contact whose documents are in `documents` ("" = none loaded yet). Counts are shown only when it matches. */
+    const [loadedFor, setLoadedForState] = React.useState("");
+    const loadedForRef = React.useRef("");
+    const setLoadedFor = React.useCallback((id: string) => { loadedForRef.current = id; setLoadedForState(id); }, []);
 
     // Keep the selected category valid when the offered list changes.
     React.useEffect(() => {
@@ -118,11 +137,14 @@ export const DocumentManager = React.memo(function DocumentManager(
     const requestSeq = React.useRef(0);
     const loadDocs = React.useCallback(async (): Promise<IDocumentItem[] | null> => {
         const seq = ++requestSeq.current;
-        if (!api || !host.contactId) { setDocuments([]); setLoading(false); return null; }
+        if (!api || !host.contactId) { setDocuments([]); setLoadedFor(""); setLoading(false); return null; }
+        const contactId = host.contactId;
         setLoading(true); setLoadError(null);
+        // Never show another contact's documents (or counts) while this contact's list is loading or failed.
+        if (loadedForRef.current !== contactId) { setDocuments([]); setLoadedFor(""); }
         try {
-            const docs = await api.listByContact(host.contactId);
-            if (seq === requestSeq.current) setDocuments(docs);
+            const docs = await api.listByContact(contactId);
+            if (seq === requestSeq.current) { setDocuments(docs); setLoadedFor(contactId); }
             return docs;
         } catch (e) {
             if (seq === requestSeq.current) setLoadError(`Could not load documents: ${(e as Error).message}`);
@@ -130,7 +152,7 @@ export const DocumentManager = React.memo(function DocumentManager(
             if (seq === requestSeq.current) setLoading(false);
         }
         return null;
-    }, [api, host.contactId]);
+    }, [api, host.contactId, setLoadedFor]);
 
     React.useEffect(() => { void loadDocs(); }, [loadDocs]);
 
@@ -140,15 +162,14 @@ export const DocumentManager = React.memo(function DocumentManager(
         return d.sourceEntity === host.entityName && d.sourceRecordId === host.recordId ? `${label} (this record)` : label;
     }, [displayNames, host.entityName, host.recordId]);
 
-    // Counts for the tab badges.
-    const recordCount = React.useMemo(
-        () => (host.recordId ? documents.filter(d => d.sourceRecordId === host.recordId).length : 0),
+    // "This record" documents, computed once: drives both the tab count and the record-scope list.
+    const recordDocs = React.useMemo(
+        () => (host.recordId ? documents.filter(d => d.sourceRecordId === host.recordId) : []),
         [documents, host.recordId]);
 
     // Documents in the active tab, before the category/text filters.
-    const scopeDocs = React.useMemo(
-        () => (scope === "record" ? documents.filter(d => d.sourceRecordId === host.recordId) : documents),
-        [documents, scope, host.recordId]);
+    const scopeDocs = scope === "record" ? recordDocs : documents;
+    const countsReady = loadedFor !== "" && loadedFor === host.contactId;
 
     // Per-category counts within the active tab (for the filter chips), largest first.
     const categoryCounts = React.useMemo(() => {
@@ -183,6 +204,10 @@ export const DocumentManager = React.memo(function DocumentManager(
     }, [scopeDocs, categoryFilter, filter, sort, sourceLabel]);
 
     const displayedBytes = React.useMemo(() => displayed.reduce((n, d) => n + (d.size || 0), 0), [displayed]);
+    const countText = displayed.length === scopeDocs.length
+        ? `${displayed.length} item${displayed.length === 1 ? "" : "s"}`
+        : `Showing ${displayed.length} of ${scopeDocs.length} items`;
+    const announcedCount = useDebounced(countText, 600);
 
     const toggleSort = React.useCallback((key: SortKey) =>
         setSort(prev => (prev.key === key ? { key, asc: !prev.asc } : { key, asc: key !== "date" })), []);
@@ -192,7 +217,7 @@ export const DocumentManager = React.memo(function DocumentManager(
         setUploading(true); setError(null); setInfo(null);
         const startedAt = Date.now();
         const totalBytes = files.reduce((n, f) => n + f.size, 0);
-        let doneBytes = 0;
+        let doneBytes = 0;        // bytes of files that actually uploaded
         const uploadedIds: string[] = [];
         const failed: File[] = [];
         const timedOut = new Set<File>();
@@ -207,24 +232,32 @@ export const DocumentManager = React.memo(function DocumentManager(
                     sourceEntity: host.entityName, sourceRecordId: host.recordId,
                 }, (loaded) => setUploadProgress(p => (p ? { ...p, sentBytes: base + Math.min(loaded, file.size) } : p)));
                 if (created?.id) uploadedIds.push(created.id);
+                doneBytes += file.size;
             } catch (e) {
                 failed.push(file);
                 if (e instanceof TimeoutError) timedOut.add(file);
                 messages.set(file, `${file.name} (${(e as Error).message})`);
+                // Failed bytes don't count: pull the bar back to what really uploaded.
+                setUploadProgress(p => (p ? { ...p, sentBytes: doneBytes } : p));
             }
-            doneBytes += file.size;
         }
-        setUploadProgress(p => (p ? { ...p, sentBytes: totalBytes, phase: "finishing" } : p));
-        if (uploadedIds.length) setNewIds(prev => new Set([...prev, ...uploadedIds]));
 
         let stillFailed = failed;
-        if (failed.length < files.length || timedOut.size) {
+        const okSoFar = files.length - failed.length;
+        if (okSoFar > 0 || timedOut.size) {
+            setUploadProgress(p => (p ? { ...p, sentBytes: doneBytes, phase: "finishing", uploaded: okSoFar } : p));
             const docs = await loadDocs();
             // A timed-out upload may have completed on the server; don't leave it staged for a duplicate retry.
             if (docs && timedOut.size) {
-                stillFailed = failed.filter(f => !(timedOut.has(f) && landedDespiteTimeout(f, docs, host.recordId, startedAt)));
+                stillFailed = failed.filter(f => {
+                    if (!timedOut.has(f)) return true;
+                    const landed = landedDespiteTimeout(f, docs, host.recordId, startedAt);
+                    if (landed) uploadedIds.push(landed.id);
+                    return !landed;
+                });
             }
         }
+        if (uploadedIds.length) setNewIds(prev => new Set([...prev, ...uploadedIds]));
         setUploadProgress(null);
         setUploading(false);
         const succeeded = files.length - stillFailed.length;
@@ -316,17 +349,17 @@ export const DocumentManager = React.memo(function DocumentManager(
 
             <TabList selectedValue={scope} onTabSelect={(_, d) => setScope(d.value as Scope)}>
                 <Tab value="record" disabled={!host.recordId}
-                     aria-label={`This Record's Documents (${entityLabel}), ${recordCount} documents`}>
+                     aria-label={`This Record's Documents (${entityLabel})${countsReady ? `, ${recordDocs.length} documents` : ""}`}>
                     <span className={s.tabLabel}>
                         This Record's Documents ({entityLabel})
-                        {!firstLoad && host.recordId && <CounterBadge count={recordCount} showZero size="small"
+                        {countsReady && host.recordId && <CounterBadge count={recordDocs.length} showZero size="small"
                             appearance={scope === "record" ? "filled" : "ghost"} color={scope === "record" ? "brand" : "informative"} />}
                     </span>
                 </Tab>
-                <Tab value="all" aria-label={`All Contact Documents (${host.contactName || "no contact"}), ${documents.length} documents`}>
+                <Tab value="all" aria-label={`All Contact Documents (${host.contactName || "no contact"})${countsReady ? `, ${documents.length} documents` : ""}`}>
                     <span className={s.tabLabel}>
                         All Contact Documents ({host.contactName || "no contact"})
-                        {!firstLoad && host.contactId && <CounterBadge count={documents.length} showZero size="small"
+                        {countsReady && <CounterBadge count={documents.length} showZero size="small"
                             appearance={scope === "all" ? "filled" : "ghost"} color={scope === "all" ? "brand" : "informative"} />}
                     </span>
                 </Tab>
@@ -348,7 +381,9 @@ export const DocumentManager = React.memo(function DocumentManager(
                         <Button size="small" appearance="subtle" icon={<ArrowSyncRegular />} title="Refresh" disabled={loading}
                                 onClick={() => void loadDocs()} />
                     </div>
-                    {loading && !firstLoad && <ProgressBar className={s.refreshBar} thickness="medium" aria-label="Refreshing documents" />}
+                    <div className={s.refreshSlot}>
+                        {loading && !firstLoad && <ProgressBar thickness="medium" aria-label="Refreshing documents" />}
+                    </div>
 
                     {categoryCounts.length > 1 && (
                         <div className={s.chips} role="group" aria-label="Filter by category">
@@ -394,13 +429,12 @@ export const DocumentManager = React.memo(function DocumentManager(
                         </div>
                     )}
                     {!firstLoad && (
-                        <Text className={s.footer} aria-live="polite">
-                            {displayed.length === scopeDocs.length
-                                ? `${displayed.length} item${displayed.length === 1 ? "" : "s"}`
-                                : `Showing ${displayed.length} of ${scopeDocs.length} items`}
-                            {displayedBytes ? ` · ${formatSize(displayedBytes)}` : ""}
+                        <Text className={s.footer}>
+                            {countText}{displayedBytes ? ` · ${formatSize(displayedBytes)}` : ""}
                         </Text>
                     )}
+                    {/* Announced once filtering settles, not on every keystroke. */}
+                    <div className={s.srOnly} aria-live="polite" aria-atomic="true">{firstLoad ? "" : announcedCount}</div>
                 </div>
 
                 {preview && (
