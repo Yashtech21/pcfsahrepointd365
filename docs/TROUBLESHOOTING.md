@@ -136,7 +136,8 @@ Don't "fix" them by undoing the documented workaround.
 
 26. **Warning "This control is bound to "x", but the configuration … says the contact lookup is "y""**
     - Cause: the form binds the control to a different lookup than the row's **Contact Lookup Column**.
-    - Fix: correct whichever is wrong. Later per-record security checks will use the configured column.
+    - Fix: correct whichever is wrong. Uploads check the record's contact through the **configured** column, so a
+      wrong value makes every upload fail with a 409.
 
 27. **New category doesn't appear**
     - Control: it's read once per page load, so reload the form. Check that the category is **active** and added to
@@ -153,4 +154,31 @@ Don't "fix" them by undoing the documented workaround.
 
 30. **`provision.mjs role`: "Privilege prvReadce_DocumentCategory not found"**
     - Cause: the tables weren't created or published yet. Run `schema` (it publishes), then `role` again.
+
+## Per-record security
+
+31. **`403 You don't have access to this contact` / `… this record`**
+    - Expected when the user's D365 roles don't let them read it. Check in D365 whether the user can open that
+      contact or record. If they can, see 34.
+
+32. **`403 You can view this record but don't have permission to change its documents`**
+    - Upload and delete need **Write** on the source record (or on the contact for contact-level documents). Grant it
+      through their role or by sharing, or set `CHANGE_ACCESS=read` on the Function App.
+
+33. **`409 This <table> is linked to a different contact` / `has no contact selected`**
+    - The record's contact (the configured Contact Lookup Column) differs from the one on the form, usually because
+      the form wasn't saved after the contact changed. Save, refresh and retry. If it always happens, the
+      configuration row's Contact Lookup Column is wrong.
+
+34. **Every request fails with `Dataverse error: Could not get a Dataverse token for the user`**
+    - The backend app lacks **Dynamics CRM → user_impersonation (Delegated)** or its admin consent (SETUP 1a.2), or the
+      client secret is wrong or expired.
+
+35. **A document disappeared from "All Contact Documents" for some users**
+    - Its source record isn't readable by them (expected), **or** the record was deleted: Dataverse can't tell those
+      apart, so such documents are hidden from everyone. They're still in SharePoint. Re-tag them to the contact
+      (`SourceEntity` = `contact`, clear `SourceRecordId`) to make them visible at contact level.
+
+36. **`403 This document isn't linked to a contact`**
+    - The file has no `ContactGuid` (e.g. uploaded straight into SharePoint). Fill in its four columns.
 

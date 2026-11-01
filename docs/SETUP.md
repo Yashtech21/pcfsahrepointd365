@@ -29,8 +29,16 @@ You need **two** registrations.
 
 1. **Entra admin center → App registrations → New registration**. Name: `D365-SP-DocManager`. Single tenant.
    Note the **Application (client) ID** and **Directory (tenant) ID**.
-2. **API permissions → Add a permission → Microsoft Graph → Application permissions → `Sites.Selected`**, then
-   **Grant admin consent**. Don't add `Sites.ReadWrite.All` or `Files.ReadWrite.All`.
+2. **API permissions:**
+   - **Add a permission → Microsoft Graph → Application permissions → `Sites.Selected`**. Don't add
+     `Sites.ReadWrite.All` or `Files.ReadWrite.All`.
+   - **Add a permission → APIs my organization uses → Dynamics CRM → Delegated permissions → `user_impersonation`**.
+     The backend uses it (On-Behalf-Of) to check each user's own access to contacts and records.
+   - **Grant admin consent** for both.
+   - CLI alternative:
+     `az ad app permission add --id <backend-client-id> --api 00000007-0000-0000-c000-000000000000 --api-permissions 78ce3f0f-a1ce-49c2-8cde-64b5c0896db4=Scope`,
+     then `az ad app permission admin-consent --id <backend-client-id>`. Check that the portal shows *Dynamics CRM /
+     user_impersonation (Delegated, Granted)*.
 3. **Certificates & secrets → New client secret.** Copy the value straight into Key Vault (step 3). Note the expiry
    date and set a reminder to rotate it.
 4. **Expose an API → Set** Application ID URI to `api://<backend-client-id>` → **Add a scope**
@@ -111,6 +119,8 @@ If you can't run the script, follow PREREQUISITES §3 exactly:
 | `API_AUDIENCE` | `api://<backend-client-id>,<backend-client-id>` (accepted token audiences) |
 | `REQUIRE_AUTH` | `true` (set `false` only for local development) |
 | `REQUIRED_ROLE` | *(optional)* `DocManager.User` |
+| `CHANGE_ACCESS` | *(optional, default `write`)* access to the source record needed to upload/delete: `write` or `read` |
+| `ACCESS_CHECKS` | Leave unset (on). `off` is accepted **only** with `REQUIRE_AUTH=false`, for local development |
 | `MAX_UPLOAD_MB` | *(optional, default 100)* |
 | `BLOCKED_EXTENSIONS` | *(optional)* comma-separated list that **replaces** the default blocked types in `fileRules.ts` |
 | `GRAPH_TIMEOUT_MS` | *(optional, default 30000)* per-request Graph timeout |
@@ -272,6 +282,10 @@ Run this on a test Opportunity whose Contact is "Test Advisor":
 | 8 | **Delete** → the button is disabled until the box is ticked → confirm | The card disappears. The file is in the SharePoint recycle bin |
 | 9 | Open an Advisor Onboarding record for the same contact → *All Contact Documents* | The Opportunity file is listed with Source "Opportunity" |
 | 10 | Create a new Opportunity (unsaved) | "Save this record before uploading documents." Upload is disabled |
+| 11 | As a user who **can't** read the test contact, open a record that shows it (or call the list API) | `403 You don't have access to this contact` |
+| 12 | As a user with **read-only** access to the Opportunity: upload, then delete | Both refused with "…don't have permission to change its documents" (unless `CHANGE_ACCESS=read`) |
+| 13 | Share the contact but **not** a second Opportunity with a user → *All Contact Documents* | That Opportunity's files aren't listed for them; contact-level files are |
+| 14 | Change the Opportunity's Contact without saving, then upload | `409 …linked to a different contact`. Save and retry: it works |
 
 ---
 

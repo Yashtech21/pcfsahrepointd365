@@ -104,9 +104,26 @@ Both tabs use **one** list call: `GET /api/documents?contactId=…`. Tabs only f
    (`API_AUDIENCE`), expiry, `tid`, and optionally the `REQUIRED_ROLE` app role. App Service Authentication is
    optional defense-in-depth and is **not** relied on.
 3. **API → Graph:** client-credentials token. The app has `Sites.Selected` with **Write on the AdvisorManagement site only**.
-4. **Authorization is per user, not per record.** Any authorized caller can list documents for any contact GUID.
-   Adding Dataverse record-level checks would go in `functions/documents.ts` (on-behalf-of call to Dataverse).
-   This is a known, documented gap; don't assume record-level checks exist.
+4. **Per-record authorization, as the user** (`backend/src/lib/access.ts`). The API token is exchanged
+   **On-Behalf-Of** for a Dataverse token for the same user (`dataverseAsUser` in `graph.ts`), so Dataverse applies
+   their security roles, business units, teams and sharing:
+
+   | Operation | The user must (in Dynamics 365, with their own roles) |
+   |---|---|
+   | List documents | Read the **contact**. Documents whose **source record** they can't read are hidden |
+   | Upload | Read the contact; the source record's **Contact Lookup Column** must point to that contact; **write** access to the source record (`CHANGE_ACCESS`) |
+   | Preview / download | Read the contact and the document's source record |
+   | Delete | Read the contact; **write** access to the source record (or to the contact for contact-level documents) |
+   | Any file without `ContactGuid` | Refused: its access can't be verified |
+
+   - "Read" = `GET /<entityset>(id)` as the user succeeds (403/404 → denied). "Write" = `RetrievePrincipalAccess`
+     includes `WriteAccess`. The record's lookup column comes from its Document Manager Configuration row.
+   - The list filter checks source records in batches (`Microsoft.Dynamics.CRM.In`, 50 ids per call). A document
+     whose source record was deleted is hidden too: Dataverse can't tell "deleted" from "not visible to you".
+   - Results are cached per request only, so a role change applies on the user's next action. Table metadata
+     (entity set name, primary key) is cached per worker.
+   - Can't be turned off in production: `ACCESS_CHECKS=off` is honoured only together with `REQUIRE_AUTH=false`
+     (local development).
 5. **Delete guards:** files only (folders → 400), plus the `X-Confirm-Delete` header must equal the current file
    name (→ 409 otherwise). Deleted files go to the SharePoint recycle bin.
 
@@ -116,3 +133,5 @@ Both tabs use **one** list call: `GET /api/documents?contactId=…`. Tabs only f
 - The client never sends a folder path. The server derives it from `contactId` + `category`.
 - Every file created by the control has all four metadata columns, or the file is removed.
 - No secrets in the control, its manifest properties, or the repo.
+- Every document operation goes through `AccessChecker` (`accessFor(caller)`) before touching SharePoint. Never add
+  an endpoint that reads or changes files without it.

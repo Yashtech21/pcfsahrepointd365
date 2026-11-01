@@ -73,9 +73,10 @@ variables and role under your admin account, then seeds them from `dataverse/see
 - The Function verifies that token in code (signature against the tenant's keys, issuer, audience, expiry, tenant and an
   optional app role). It does not rely on the App Service Authentication header, which can be forged if that setting is off.
 - The Function calls Graph app-only with **Sites.Selected**, so it can write only to the AdvisorManagement site.
-- ⚠️ Authorization is **per user, not per record**: any user allowed to call the API can list documents for any contact GUID.
-  If you need Dataverse record-level security, add a check in `backend/src/functions/documents.ts`
-  (e.g. call the Dataverse Web API on behalf of the user to confirm read access to the contact).
+- 🔒 **Per-record security:** every operation is checked in Dataverse **as the user** (On-Behalf-Of), so their D365 roles
+  decide. They must be able to read the contact to see its documents. Documents from records they can't read are
+  hidden. Upload and delete need write access to the record, and an upload's record must actually belong to the
+  contact. See docs/ARCHITECTURE.md §6.
 
 ## Develop
 

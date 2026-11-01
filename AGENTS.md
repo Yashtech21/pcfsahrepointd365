@@ -76,7 +76,10 @@ The **browser never calls Microsoft Graph or SharePoint directly**. All Graph ac
    (`fileRules.ts`: blocked types, executable content, content/extension match), file-name sanitising, input
    validation and authorization. Client checks are for UX only.
 9. **Never trust `X-MS-CLIENT-PRINCIPAL`.** Callers are authenticated by verifying the bearer JWT in
-   `backend/src/lib/auth.ts`.
+   `backend/src/lib/auth.ts`. **Every document endpoint authorizes per record** through `accessFor(caller)`
+   (`backend/src/lib/access.ts`, Dataverse On-Behalf-Of as the user) **before** touching SharePoint: read the
+   contact, filter or verify source records, write access for changes. Never add a bypass, never use the app-only
+   `dataverse()` for user authorization decisions, and keep `access.test.ts` covering any new rule.
 10. **Secrets never go in the PCF control or the repo.** Control properties hold only public IDs and URLs.
     `GRAPH_CLIENT_SECRET` lives in Function App settings / Key Vault. `local.settings.json` is gitignored.
 11. **Files are untrusted input.** Never store a file before `assertFileAllowed()` passes. Never hand the browser a

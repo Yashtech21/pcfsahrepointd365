@@ -216,39 +216,56 @@ export function assertTrustedUrl(raw: string): string {
     return u.toString();
 }
 
-/** Short-lived embeddable preview (Graph driveItem: preview). */
-export async function previewTarget(itemId: string): Promise<PreviewTarget> {
+/** A file plus the tags needed to authorize access to it. */
+export interface FileMeta {
+    id: string;
+    name: string;
+    isFile: boolean;
+    downloadUrl?: string;
+    contactId: string;       // ContactGuid ("" if untagged)
+    sourceEntity: string;    // SourceEntity, "contact" when empty
+    sourceRecordId: string;  // SourceRecordId ("" if none)
+}
+
+/** One Graph call: the item, its download URL and its metadata columns. */
+export async function getFileMeta(itemId: string): Promise<FileMeta> {
     const { driveId } = await getTarget();
-    const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}?$select=id,name,file`);
-    if (!item.file) throw new UnsupportedItemError("Only files can be previewed");
-    const body = isOfficeFile(item.name) ? { viewer: "office", chromeless: true } : {};
+    const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}?$expand=listItem($expand=fields($select=${FIELDS}))`);
+    const dto = toDto(item);
+    return {
+        id: item.id, name: item.name, isFile: !!item.file && !item.folder,
+        downloadUrl: item["@microsoft.graph.downloadUrl"],
+        contactId: dto.contactId, sourceEntity: dto.sourceEntity, sourceRecordId: dto.sourceRecordId,
+    };
+}
+
+/** Short-lived embeddable preview (Graph driveItem: preview). */
+export async function previewTarget(file: FileMeta): Promise<PreviewTarget> {
+    if (!file.isFile) throw new UnsupportedItemError("Only files can be previewed");
+    const { driveId } = await getTarget();
+    const body = isOfficeFile(file.name) ? { viewer: "office", chromeless: true } : {};
     const r = await graph<{ getUrl?: string; postUrl?: string; postParameters?: string }>(
-        `/drives/${driveId}/items/${item.id}/preview`, { method: "POST", idempotent: true, json: body });
+        `/drives/${driveId}/items/${file.id}/preview`, { method: "POST", idempotent: true, json: body });
     if (r.getUrl) return { url: assertTrustedUrl(r.getUrl) };
     if (r.postUrl) return { url: assertTrustedUrl(r.postUrl), postParameters: r.postParameters ?? "" };
     throw new UnsupportedItemError("Preview is not available for this file type");
 }
 
-export async function downloadUrl(itemId: string): Promise<string> {
-    const { driveId } = await getTarget();
-    const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}`);
-    const url = item["@microsoft.graph.downloadUrl"];
-    if (!item.file || !url) throw new UnsupportedItemError("Item is not a downloadable file");
-    return assertTrustedUrl(url);
+export function downloadUrl(file: FileMeta): string {
+    if (!file.isFile || !file.downloadUrl) throw new UnsupportedItemError("Item is not a downloadable file");
+    return assertTrustedUrl(file.downloadUrl);
 }
-
 
 /**
  * Deletes a single file (it goes to the SharePoint recycle bin). Folders are never deleted through
  * the API, and the caller must echo the file name it confirmed, so a stale or forged id cannot
  * remove a different item.
  */
-export async function deleteFile(itemId: string, confirmedName: string): Promise<void> {
-    const { driveId } = await getTarget();
-    const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}?$select=id,name,file,folder`);
-    if (!item.file || item.folder) throw new UnsupportedItemError("Only files can be deleted");
-    if (!confirmedName || confirmedName !== item.name) {
+export async function deleteFile(file: FileMeta, confirmedName: string): Promise<void> {
+    if (!file.isFile) throw new UnsupportedItemError("Only files can be deleted");
+    if (!confirmedName || confirmedName !== file.name) {
         throw new DeleteNotConfirmedError("Delete was not confirmed for this file");
     }
-    await graph(`/drives/${driveId}/items/${item.id}`, { method: "DELETE" });
+    const { driveId } = await getTarget();
+    await graph(`/drives/${driveId}/items/${file.id}`, { method: "DELETE" });
 }

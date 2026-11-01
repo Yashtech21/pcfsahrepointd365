@@ -43,6 +43,10 @@ The client type is `IDocumentItem` in `pcf/.../types.ts` (it doesn't use `contac
 | `GET /documents/{itemId}/download` | — | `200 { "url": "<pre-authenticated downloadUrl>" }` | `400` not a file, `404` |
 | `DELETE /documents/{itemId}` | header `X-Confirm-Delete: <encodeURIComponent(fileName)>` | `204` | `400` missing header / folder, `404`, `409` name doesn't match the item |
 
+Authorization (all endpoints, `access.ts`, as the user): `403` when the user can't read the contact or record, or
+lacks write access for upload/delete; `409` when an upload's record isn't linked to the contact (configured Contact
+Lookup Column). The list silently omits documents from records the user can't read.
+
 Shared error mapping (`handler()` in `documents.ts`): Graph `404` → `404`; Graph `403` → `403`; any timeout
 (Graph call or upload chunk) → `504`; Graph `413`/`507` (quota) → `507`; other Graph or network errors → `502`;
 anything unexpected → `500`. Every URL returned to the browser (preview, download) has passed `assertTrustedUrl`
@@ -143,7 +147,20 @@ App-only **`Sites.Selected`** with a **Write** grant on `/sites/AdvisorManagemen
 | Table configuration | `retrieveMultipleRecords("ce_documentmanagerconfig", …$filter=ce_tablelogicalname eq '<table>' and statecode eq 0&$expand=ce_documentmanagerconfig_documentcategory(…))` |
 | Category catalog | `retrieveMultipleRecords("ce_documentcategory", "?$select=ce_name,ce_value,ce_color,ce_sortorder,statecode")` |
 
-### Backend (as its application user, `backend/src/lib/tableConfig.ts`, `dataverse()` in `graph.ts`)
+### Backend as the user (On-Behalf-Of, `backend/src/lib/access.ts`, `dataverseAsUser()` in `graph.ts`)
+
+| Check | Call |
+|---|---|
+| Table metadata (cached per worker) | `GET /EntityDefinitions(LogicalName='<table>')?$select=EntitySetName,PrimaryIdAttribute` |
+| Read access | `GET /<entityset>(<id>)?$select=<primaryid>` → 200 = readable. 403/404 = denied |
+| Write access | `GET /WhoAmI`, then `GET /systemusers(<me>)/Microsoft.Dynamics.CRM.RetrievePrincipalAccess(Target=@tid)?@tid={"@odata.id":"<entityset>(<id>)"}` → `AccessRights` contains `WriteAccess` |
+| Record belongs to contact | `GET /<entityset>(<id>)?$select=_<contactlookupcolumn>_value` |
+| Readable source records (list) | `GET /<entityset>?$select=<primaryid>&$filter=Microsoft.Dynamics.CRM.In(PropertyName='<primaryid>',PropertyValues=['id1',…])` (50 per call) |
+
+Token: On-Behalf-Of exchange of the caller's API token for `{DATAVERSE_URL}/.default` (the backend app needs the
+delegated *Dynamics CRM / user_impersonation* permission).
+
+### Backend as its application user (`backend/src/lib/tableConfig.ts`, `dataverse()` in `graph.ts`)
 
 | Purpose | Call |
 |---|---|

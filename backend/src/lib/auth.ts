@@ -2,7 +2,11 @@ import { HttpRequest } from "@azure/functions";
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from "jose";
 import { config } from "./config";
 
-export interface Caller { userId: string; name: string; tenantId: string; roles: string[] }
+export interface Caller {
+    userId: string; name: string; tenantId: string; roles: string[];
+    /** The verified bearer token, used for On-Behalf-Of calls to Dataverse as this user. Empty in local dev. */
+    token: string;
+}
 
 export class AuthError extends Error {
     constructor(public status: 401 | 403, message: string) { super(message); }
@@ -20,7 +24,7 @@ let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
  */
 export async function getCaller(req: HttpRequest): Promise<Caller> {
     if (!config.requireAuth) {
-        return { userId: "local-dev", name: "local-dev", tenantId: "", roles: [] };
+        return { userId: "local-dev", name: "local-dev", tenantId: "", roles: [], token: "" };
     }
     const header = req.headers.get("authorization") ?? "";
     const match = /^Bearer\s+(.+)$/i.exec(header);
@@ -47,6 +51,7 @@ export async function getCaller(req: HttpRequest): Promise<Caller> {
         name: payload.name ?? payload.preferred_username ?? "",
         tenantId: (payload.tid ?? "").toLowerCase(),
         roles: Array.isArray(payload.roles) ? payload.roles : [],
+        token: match[1],
     };
     if (caller.tenantId !== tenant) throw new AuthError(403, "Caller is not from the expected tenant");
     if (config.requiredRole && !caller.roles.includes(config.requiredRole)) {

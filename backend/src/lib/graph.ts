@@ -1,4 +1,5 @@
-import { ClientSecretCredential } from "@azure/identity";
+import { createHash } from "node:crypto";
+import { ClientSecretCredential, OnBehalfOfCredential } from "@azure/identity";
 import { config } from "./config";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -79,22 +80,60 @@ export interface GraphInit extends RequestInit {
  */
 export function graph<T = unknown>(pathOrUrl: string, init: GraphInit = {}): Promise<T> {
     const url = pathOrUrl.startsWith("https://") ? pathOrUrl : `${GRAPH}${pathOrUrl}`;
-    return request<T>(url, init, GRAPH_SCOPE, "SharePoint");
+    return request<T>(url, init, () => token(GRAPH_SCOPE), "SharePoint");
 }
+
+const dvHeaders = (init: GraphInit) => ({
+    Accept: "application/json", "OData-Version": "4.0", "OData-MaxVersion": "4.0",
+    ...(init.headers as Record<string, string>),
+});
+const dvOrg = () => config.dataverseUrl.replace(/\/+$/, "");
 
 /**
  * Calls the Dataverse Web API (v9.2) as the backend's application user, with the same timeout/retry rules.
  * `path` is relative to /api/data/v9.2, e.g. "/ce_documentmanagerconfigs?$filter=...".
  */
 export function dataverse<T = unknown>(path: string, init: GraphInit = {}): Promise<T> {
-    const org = config.dataverseUrl.replace(/\/+$/, "");
-    return request<T>(`${org}/api/data/v9.2${path}`, {
-        ...init,
-        headers: { Accept: "application/json", "OData-Version": "4.0", "OData-MaxVersion": "4.0", ...(init.headers as Record<string, string>) },
-    }, `${org}/.default`, "Dataverse");
+    const org = dvOrg();
+    return request<T>(`${org}/api/data/v9.2${path}`, { ...init, headers: dvHeaders(init) }, () => token(`${org}/.default`), "Dataverse");
 }
 
-async function request<T>(url: string, init: GraphInit, scope: string, service: string): Promise<T> {
+// ── Dataverse as the signed-in user (On-Behalf-Of) ────────────────────────────────────────────────
+// The caller's API token is exchanged for a Dataverse token for the same user, so Dataverse applies
+// that user's own security roles. Credentials are cached per incoming token (they cache the exchanged
+// token internally), bounded so a busy worker can't grow without limit.
+const OBO_CACHE_MAX = 500;
+const oboCache = new Map<string, OnBehalfOfCredential>();
+
+function oboCredential(userAssertion: string): OnBehalfOfCredential {
+    const key = createHash("sha256").update(userAssertion).digest("base64");
+    let cred = oboCache.get(key);
+    if (!cred) {
+        if (oboCache.size >= OBO_CACHE_MAX) oboCache.delete(oboCache.keys().next().value!);
+        cred = new OnBehalfOfCredential({
+            tenantId: config.tenantId, clientId: config.clientId, clientSecret: config.clientSecret,
+            userAssertionToken: userAssertion,
+        });
+        oboCache.set(key, cred);
+    }
+    return cred;
+}
+
+/** Calls the Dataverse Web API as the user who sent `userAssertion` (their bearer token for this API). */
+export function dataverseAsUser<T = unknown>(userAssertion: string, path: string, init: GraphInit = {}): Promise<T> {
+    const org = dvOrg();
+    const getToken = async () => {
+        try {
+            return (await oboCredential(userAssertion).getToken(`${org}/.default`)).token;
+        } catch (e) {
+            // Usually: missing delegated "Dynamics CRM / user_impersonation" consent on the backend app.
+            throw new GraphError(502, `Could not get a Dataverse token for the user: ${(e as Error).message}`, "obo", "Dataverse");
+        }
+    };
+    return request<T>(`${org}/api/data/v9.2${path}`, { ...init, headers: dvHeaders(init) }, getToken, "Dataverse");
+}
+
+async function request<T>(url: string, init: GraphInit, getToken: () => Promise<string>, service: string): Promise<T> {
     const method = (init.method ?? "GET").toUpperCase();
     const idempotent = init.idempotent ?? ["GET", "HEAD", "DELETE", "PATCH"].includes(method);
     const timeoutMs = init.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -111,7 +150,7 @@ async function request<T>(url: string, init: GraphInit, scope: string, service: 
         let res: Response;
         try {
             // Token fetched per attempt: a long retry sequence must not reuse an expired token.
-            const headers = { Authorization: `Bearer ${await token(scope)}`, ...extraHeaders };
+            const headers = { Authorization: `Bearer ${await getToken()}`, ...extraHeaders };
             res = await fetch(url, { ...fetchInit, method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
         } catch (e) {
             const outcome = isTimeout(e) ? "timeout" : "network";

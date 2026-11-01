@@ -1,5 +1,6 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
-import { AuthError, getCaller } from "../lib/auth";
+import { AccessChecker, AccessDeniedError, accessFor, AccessLevel, RecordContactMismatchError } from "../lib/access";
+import { AuthError, Caller, getCaller } from "../lib/auth";
 import { config } from "../lib/config";
 import { RejectedFileError } from "../lib/errors";
 import { GraphError } from "../lib/graph";
@@ -8,20 +9,28 @@ import { ConfigError, planUpload } from "../lib/tableConfig";
 import * as sp from "../lib/sharepoint";
 
 type Handler = (req: HttpRequest, ctx: InvocationContext) => Promise<HttpResponseInit>;
+type AuthedHandler = (req: HttpRequest, ctx: InvocationContext, caller: Caller, access: AccessChecker) => Promise<HttpResponseInit>;
 
 class BadRequest extends Error {}
 
 const json = (status: number, body: unknown): HttpResponseInit => ({ status, jsonBody: body });
 
 /** Shared auth + error handling for every endpoint. */
-function handler(fn: Handler): Handler {
+function handler(fn: AuthedHandler): Handler {
     return async (req, ctx) => {
+        let who = "anonymous";
         try {
             const caller = await getCaller(req);
-            ctx.log(`${req.method} ${req.url} by ${caller.name || caller.userId}`);
-            return await fn(req, ctx);
+            who = caller.name || caller.userId;
+            ctx.log(`${req.method} ${req.url} by ${who}`);
+            return await fn(req, ctx, caller, accessFor(caller));
         } catch (e) {
             if (e instanceof AuthError) return json(e.status, { error: e.message });
+            if (e instanceof AccessDeniedError) {
+                ctx.warn(`Access denied for ${who} on ${req.method} ${req.url}: ${e.message}`);
+                return json(403, { error: e.message });
+            }
+            if (e instanceof RecordContactMismatchError) return json(409, { error: e.message });
             if (e instanceof BadRequest || e instanceof sp.UnsupportedItemError || e instanceof ConfigError) {
                 return json(400, { error: e.message });
             }
@@ -45,6 +54,21 @@ function requireGuid(value: string | null, name: string): string {
     return g;
 }
 
+/**
+ * Authorizes an operation on an existing file from its SharePoint tags: the user must read its contact,
+ * and have `level` access on its source record (or on the contact for documents without one).
+ * Untagged files can't be authorized and are refused.
+ */
+async function authorizeFile(access: AccessChecker, file: sp.FileMeta, level: AccessLevel): Promise<void> {
+    if (!file.contactId) throw new AccessDeniedError("This document isn't linked to a contact, so access to it can't be verified");
+    await access.assertContact(file.contactId, "read");
+    if (file.sourceRecordId && file.sourceEntity !== "contact") {
+        await access.assertRecord(file.sourceEntity, file.sourceRecordId, level);
+    } else if (level === "write") {
+        await access.assertContact(file.contactId, "write");
+    }
+}
+
 function requireItemId(req: HttpRequest): string {
     const id = req.params.itemId ?? "";
     if (!/^[A-Za-z0-9!_\-]+$/.test(id)) throw new BadRequest("Invalid item id");
@@ -56,9 +80,11 @@ app.http("listDocuments", {
     methods: ["GET"],
     authLevel: "anonymous", // protected by App Service Authentication, see README
     route: "documents",
-    handler: handler(async (req) => {
+    handler: handler(async (req, _ctx, _caller, access) => {
         const contactId = requireGuid(req.query.get("contactId"), "contactId");
-        return json(200, await sp.listByContact(contactId));
+        await access.assertContact(contactId, "read");
+        // Hide documents from records this user can't see (e.g. another team's opportunity).
+        return json(200, await access.filterReadable(await sp.listByContact(contactId)));
     }),
 });
 
@@ -68,7 +94,7 @@ app.http("uploadDocument", {
     methods: ["POST"],
     authLevel: "anonymous",
     route: "documents/upload",
-    handler: handler(async (req) => {
+    handler: handler(async (req, _ctx, _caller, access) => {
         const q = req.query;
         const contactId = requireGuid(q.get("contactId"), "contactId");
         const sourceRecordId = requireGuid(q.get("sourceRecordId"), "sourceRecordId");
@@ -80,6 +106,12 @@ app.http("uploadDocument", {
 
         // Table must be configured, category active and allowed for it (Dataverse configuration).
         const plan = await planUpload(sourceEntity, category, config.maxUploadBytes);
+
+        // Per-record security, as the user: they must see the contact, the record must belong to that
+        // contact (configured Contact Lookup Column), and they need CHANGE_ACCESS on the record.
+        await access.assertContact(contactId, "read");
+        await access.assertRecordLinkedToContact(plan.table, sourceRecordId, contactId);
+        if (config.changeAccess === "write") await access.assertRecord(sourceEntity, sourceRecordId, "write");
         const tooLarge = () => json(413, { error: `File is too large (limit ${Math.round(plan.maxBytes / 1024 / 1024)} MB for ${plan.table.name})` });
 
         const declared = Number(req.headers.get("content-length") ?? "0");
@@ -101,7 +133,11 @@ app.http("previewDocument", {
     methods: ["POST"],
     authLevel: "anonymous",
     route: "documents/{itemId}/preview",
-    handler: handler(async (req) => json(200, await sp.previewTarget(requireItemId(req)))),
+    handler: handler(async (req, _ctx, _caller, access) => {
+        const file = await sp.getFileMeta(requireItemId(req));
+        await authorizeFile(access, file, "read");
+        return json(200, await sp.previewTarget(file));
+    }),
 });
 
 // GET /api/documents/{itemId}/download -> { url } (short-lived pre-authenticated URL)
@@ -109,7 +145,11 @@ app.http("downloadDocument", {
     methods: ["GET"],
     authLevel: "anonymous",
     route: "documents/{itemId}/download",
-    handler: handler(async (req) => json(200, { url: await sp.downloadUrl(requireItemId(req)) })),
+    handler: handler(async (req, _ctx, _caller, access) => {
+        const file = await sp.getFileMeta(requireItemId(req));
+        await authorizeFile(access, file, "read");
+        return json(200, { url: sp.downloadUrl(file) });
+    }),
 });
 
 // DELETE /api/documents/{itemId}
@@ -118,13 +158,15 @@ app.http("deleteDocument", {
     methods: ["DELETE"],
     authLevel: "anonymous",
     route: "documents/{itemId}",
-    handler: handler(async (req, ctx) => {
+    handler: handler(async (req, ctx, caller, access) => {
         const itemId = requireItemId(req);
         let confirmed = "";
         try { confirmed = decodeURIComponent(req.headers.get("x-confirm-delete") ?? ""); } catch { /* malformed */ }
         if (!confirmed) throw new BadRequest("Missing X-Confirm-Delete header");
-        await sp.deleteFile(itemId, confirmed);
-        ctx.log(`Deleted document ${itemId} (${confirmed})`);
+        const file = await sp.getFileMeta(itemId);
+        await authorizeFile(access, file, config.changeAccess);
+        await sp.deleteFile(file, confirmed);
+        ctx.log(`Deleted document ${itemId} (${confirmed}) by ${caller.name || caller.userId}`);
         return { status: 204 };
     }),
 });

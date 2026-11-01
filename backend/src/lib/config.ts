@@ -25,5 +25,12 @@ export const config = {
     get docConfigFile() { return process.env.DOC_CONFIG_FILE || ""; },
     /** How long configuration read from Dataverse is cached, in seconds (default 300). */
     get configCacheSeconds() { return Number(process.env.CONFIG_CACHE_SECONDS || "300"); },
+    /**
+     * Per-record security (Dataverse, as the user). "on" (default) or "off". "off" is only allowed when
+     * REQUIRE_AUTH=false (local development); there is no way to turn it off in production.
+     */
+    get accessChecks() { return (process.env.ACCESS_CHECKS ?? "on").toLowerCase() !== "off"; },
+    /** Access the user needs on the source record to upload/delete: "write" (default) or "read". */
+    get changeAccess(): "read" | "write" { return (process.env.CHANGE_ACCESS ?? "write").toLowerCase() === "read" ? "read" : "write"; },
     get maxUploadBytes() { return Number(process.env.MAX_UPLOAD_MB || "100") * 1024 * 1024; },
 };

@@ -37,7 +37,7 @@ One **active** row per table that hosts the control.
 |---|---|---|---|
 | Name | `ce_name` | ✓ | Friendly name, e.g. "Advisor Onboarding" |
 | Table Logical Name | `ce_tablelogicalname` | ✓ (unique key) | e.g. `opportunity`, `ce_advisoronboarding` |
-| **Contact Lookup Column** | `ce_contactlookupcolumn` | ✓ | Logical name of **that table's** lookup to Contact, e.g. `parentcontactid` on Opportunity, `ce_recruitid` on Advisor Onboarding. The control warns if the form binds a different column. It will also be used for per-record security checks later |
+| **Contact Lookup Column** | `ce_contactlookupcolumn` | ✓ | Logical name of **that table's** lookup to Contact, e.g. `parentcontactid` on Opportunity, `ce_recruitid` on Advisor Onboarding. The control warns if the form binds a different column. The backend uses it to check that an upload's record really belongs to the contact |
 | Max Upload (MB) | `ce_maxuploadmb` | | Optional per-table limit. The backend's `MAX_UPLOAD_MB` still caps it |
 | Allowed Categories | N:N `ce_documentmanagerconfig_documentcategory` | | Categories offered on this table (active ones only) |
 | Status | `statecode` | | **Inactive** = the control shows "Not set up for this table" and the backend refuses uploads |
@@ -154,7 +154,7 @@ Deactivate its configuration row. The control shows "Not set up for this table",
 | Category must be active and allowed on that table | Only those are offered | `400 Category "x" is not allowed on <table>` |
 | Per-table size limit | Files refused when selected | `413 File is too large (limit N MB for <table>)` |
 | Folder path | — | Sanitised. `..`, empty paths or more than 5 levels → `400` |
-| Bound lookup = configured Contact Lookup Column | Warning banner | (used by per-record security later) |
+| Bound lookup = configured Contact Lookup Column | Warning banner | Upload reads the record **as the user** through this column and refuses (409) if it doesn't point to the contact |
 
 The backend caches configuration per table for `CONFIG_CACHE_SECONDS` (default 300). Failed reads aren't
 cached. For local development, set `DOC_CONFIG_FILE=../dataverse/seed.json` to read configuration from the seed file

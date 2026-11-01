@@ -132,9 +132,19 @@ it in **Contact Lookup Column**.
 | **Document Manager Reader** role | Organization | Read configuration tables and environment variables |
 | *(Optional)* Entra app role `DocManager.User` | — | Only if `REQUIRED_ROLE` is set on the Function App |
 
-> ⚠️ **Authorization is per user, not per record.** Anyone who can call the API can list documents for any contact
-> GUID. If your Dataverse security restricts which contacts a user may see, that is **not** enforced for documents
-> yet. See ARCHITECTURE §6.
+> 🔒 **Document access follows each user's Dynamics 365 security.** The backend checks every operation in Dataverse
+> as the user (On-Behalf-Of):
+>
+> | Operation | The user must (in Dynamics 365, with their own roles) |
+> |---|---|
+> | List documents | Read the **contact**. Documents whose **source record** they can't read are hidden |
+> | Upload | Read the contact; the source record's **Contact Lookup Column** must point to that contact; **write** access to the source record (`CHANGE_ACCESS`) |
+> | Preview / download | Read the contact and the document's source record |
+> | Delete | Read the contact; **write** access to the source record (or to the contact for contact-level documents) |
+> | Any file without `ContactGuid` | Refused: its access can't be verified |
+>
+> So users need their **normal** D365 access to the contact and the hosting records, plus **Write** on a record to
+> upload or delete its documents. Set `CHANGE_ACCESS=read` on the Function App to let read-only users upload too.
 
 ### 4.5 Recommended (not required)
 
@@ -147,7 +157,7 @@ it in **Contact Lookup Column**.
 
 | App registration | Type | Must have |
 |---|---|---|
-| **`D365-SP-DocManager`** (backend) | Web/API | Graph **Application** permission `Sites.Selected` with **admin consent**; a client secret (stored in Key Vault); **Expose an API** with App ID URI `api://<client-id>` and scope `user_impersonation`; *(optional)* app role `DocManager.User` |
+| **`D365-SP-DocManager`** (backend) | Web/API | Graph **Application** permission `Sites.Selected` with **admin consent**; **Dynamics CRM → Delegated `user_impersonation`** with **admin consent** (for per-record checks as the user); a client secret (stored in Key Vault); **Expose an API** with App ID URI `api://<client-id>` and scope `user_impersonation`; *(optional)* app role `DocManager.User` |
 | **`D365-SP-DocManager-Client`** (control) | **Single-page application** | Redirect URI for **every** D365 org URL that hosts the control (e.g. `https://contoso.crm.dynamics.com`, `https://contoso-test.crm.dynamics.com`); delegated permission to `D365-SP-DocManager` / `user_impersonation` with **admin consent** |
 
 ## 6. Azure
