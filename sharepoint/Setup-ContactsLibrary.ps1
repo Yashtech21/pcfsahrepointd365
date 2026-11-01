@@ -28,10 +28,10 @@ if (-not (Get-PnPList -Identity $LibraryName -ErrorAction SilentlyContinue)) {
     Write-Host "Created library $LibraryName"
 }
 
-# 2. Columns (spec section 4.2)
-$choices = @("Offer Letter", "Commissions", "Payslip", "Resignation Letter", "FinCEN_U4", "Misc")
+# 2. Columns. DocCategory is plain text: categories are managed in Dataverse (ce_documentcategory),
+#    so adding a category never requires a SharePoint change.
 $columns = @(
-    @{ Name = "DocCategory";    Display = "Document Category"; Type = "Choice"; Indexed = $true  },
+    @{ Name = "DocCategory";    Display = "Document Category"; Type = "Text";   Indexed = $true  },
     @{ Name = "SourceEntity";   Display = "Source Entity";     Type = "Text";   Indexed = $false },
     @{ Name = "SourceRecordId"; Display = "Source Record ID";  Type = "Text";   Indexed = $true  },
     @{ Name = "ContactGuid";    Display = "Contact ID";        Type = "Text";   Indexed = $true  }
@@ -39,12 +39,10 @@ $columns = @(
 foreach ($c in $columns) {
     $field = Get-PnPField -List $LibraryName -Identity $c.Name -ErrorAction SilentlyContinue
     if (-not $field) {
-        if ($c.Type -eq "Choice") {
-            Add-PnPField -List $LibraryName -InternalName $c.Name -DisplayName $c.Display -Type Choice -Choices $choices -AddToDefaultView | Out-Null
-        } else {
-            Add-PnPField -List $LibraryName -InternalName $c.Name -DisplayName $c.Display -Type Text -AddToDefaultView | Out-Null
-        }
+        Add-PnPField -List $LibraryName -InternalName $c.Name -DisplayName $c.Display -Type Text -AddToDefaultView | Out-Null
         Write-Host "Added column $($c.Name)"
+    } elseif ($field.TypeAsString -ne "Text") {
+        Write-Warning "$($c.Name) exists as $($field.TypeAsString). Change it to 'Single line of text' (Column settings > type) so new categories from Dataverse can be stored."
     }
     # Required columns would leave uploaded files checked out (the file is created before its metadata is set).
     $values = @{ Required = $false }

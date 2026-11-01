@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { contactFolderName, encodePath, isOfficeFile, isValidEntityName, normalizeGuid, sanitizeName } from "../src/lib/naming";
-import { folderForCategory } from "../src/lib/categories";
 import { toDto } from "../src/lib/sharepoint";
 
 const GUID = "a1b2c3d4-0000-4000-8000-1234567890ab";
@@ -25,12 +24,6 @@ test("sanitizeName strips illegal characters and trailing dots", () => {
 
 test("encodePath encodes each segment", () => {
     assert.equal(encodePath("/John Doe_x/Offer Letters/a#1.pdf"), "John%20Doe_x/Offer%20Letters/a%231.pdf");
-});
-
-test("categories map to folders from the spec", () => {
-    assert.equal(folderForCategory("Offer Letter"), "Offer Letters");
-    assert.equal(folderForCategory("FinCEN_U4"), "Onboarding Documents/FinCEN_U4");
-    assert.equal(folderForCategory("Unknown"), undefined);
 });
 
 test("entity name validation", () => {

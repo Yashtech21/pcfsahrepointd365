@@ -12,6 +12,10 @@
     "SP_SITE_PATH": "/sites/AdvisorManagement",
     "SP_LIBRARY_NAME": "Contacts",
 
+    "DATAVERSE_URL": "https://contoso.crm.dynamics.com",
+    "DOC_CONFIG_FILE": "../dataverse/seed.json",
+    "CONFIG_CACHE_SECONDS": "300",
+
     "ALLOWED_ORIGINS": "https://contoso.crm.dynamics.com",
     "API_AUDIENCE": "api://<D365-SP-DocManager app client id>,<D365-SP-DocManager app client id>",
     "REQUIRE_AUTH": "true",

@@ -19,5 +19,11 @@ export const config = {
         return list.length ? list : [`api://${req("GRAPH_CLIENT_ID")}`, req("GRAPH_CLIENT_ID")];
     },
     get requiredRole() { return process.env.REQUIRED_ROLE || ""; },
+    /** Dataverse org URL, e.g. https://contoso.crm.dynamics.com (source of categories and table configuration). */
+    get dataverseUrl() { return req("DATAVERSE_URL"); },
+    /** Local development only: read configuration from a seed.json-shaped file instead of Dataverse. */
+    get docConfigFile() { return process.env.DOC_CONFIG_FILE || ""; },
+    /** How long configuration read from Dataverse is cached, in seconds (default 300). */
+    get configCacheSeconds() { return Number(process.env.CONFIG_CACHE_SECONDS || "300"); },
     get maxUploadBytes() { return Number(process.env.MAX_UPLOAD_MB || "100") * 1024 * 1024; },
 };

@@ -11,6 +11,7 @@ Read this file first. It is the single source of instructions for AI coding agen
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | A build, packaging, auth or runtime error |
 | [docs/PREREQUISITES.md](docs/PREREQUISITES.md) | What must exist in SharePoint / D365 / Entra / Azure (columns, lookups, settings, roles) |
 | [docs/SETUP.md](docs/SETUP.md) | Step-by-step setup and smoke test |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Categories, per-table config (contact lookup column), environment variables, `dataverse/provision.mjs` |
 
 ## Project overview
 
@@ -59,15 +60,19 @@ The **browser never calls Microsoft Graph or SharePoint directly**. All Graph ac
    cancel request. Only idempotent requests are retried after ambiguous failures (`retryDecision`). Timeouts surface
    as a message with Retry, never an endless spinner. Timeout values are named constants; see PCF_STANDARDS §4 and
    API_SPECS Part B.
-5. **Entity context comes from `context.mode.contextInfo`** (`entityTypeName`, `entityId`). Category lists come
-   from `categoriesFor(entityName, categoryConfig)` in `categories.ts`. `context.page` is not used.
+5. **Entity context comes from `context.mode.contextInfo`** (`entityTypeName`, `entityId`). `context.page` is not used.
+   **Configuration is data, not code:** categories, folder paths, which tables host the control, each table's
+   **Contact lookup column** and upload limits live in Dataverse (`ce_documentcategory`, `ce_documentmanagerconfig`).
+   The connection settings live in the environment variables `ce_DocManager*`. Never hard-code a category, table or
+   connection value. See docs/CONFIGURATION.md.
 6. **No DOM access outside the control.** React state and Fluent components only. Don't touch the D365 page DOM
    or `Xrm`. (Exceptions: the temporary `<a>` used to start a download, and submitting the control's own
    React-rendered preview `<form>`.)
 7. **Destructive actions need confirmation on both sides.** Delete goes through `DeleteDialog` (checkbox
    acknowledgement). `DocumentApi.remove(id, name)` sends `X-Confirm-Delete`, and the backend refuses folders and
    name mismatches. Never add a delete or bulk-delete path that skips either check.
-8. **Server is the source of truth** for category → folder mapping (`backend/src/lib/categories.ts`), file safety
+8. **Server is the source of truth** for enforcing configuration (`backend/src/lib/tableConfig.ts`: table configured,
+   category allowed, folder path, size limit), file safety
    (`fileRules.ts`: blocked types, executable content, content/extension match), file-name sanitising, input
    validation and authorization. Client checks are for UX only.
 9. **Never trust `X-MS-CLIENT-PRINCIPAL`.** Callers are authenticated by verifying the bearer JWT in
@@ -86,6 +91,8 @@ The **browser never calls Microsoft Graph or SharePoint directly**. All Graph ac
 | Build control (prod, check size) | `npm run build:prod` (`pcf/`) |
 | Test harness | `npm start watch` (`pcf/`) — harness has no real API; see PCF_STANDARDS §6 |
 | Backend build + unit tests | `npm test` (`backend/`) |
+| Dataverse provisioning script tests | `node --test dataverse/provision.test.mjs` (repo root) |
+| Provision / configure Dataverse | `node dataverse/provision.mjs all --org <url> [--dry-run\|--offline]`, then `set-env`, `app-user` |
 | Run backend locally | `cp local.settings.sample.json local.settings.json && npm start` (`backend/`, needs Functions Core Tools) |
 | Package solution | `pac solution init …` → `pac solution add-reference --path ../pcf` → `dotnet build -c Release` (or `msbuild /t:build /restore /p:Configuration=Release`) |
 | Push to a dev org | `pac pcf push --publisher-prefix ce` (`pcf/`) |
@@ -102,5 +109,7 @@ type check.
 - If you changed a contract, update `docs/API_SPECS.md`. If you changed a folder, column or flow, update
   `docs/ARCHITECTURE.md`. If you changed a setting, update `docs/SETUP.md`. If you changed a SharePoint column, Dataverse requirement or
   permission, update `docs/PREREQUISITES.md` and `sharepoint/Test-ContactsLibrary.ps1`.
-- When adding a category, update all three places: `backend/src/lib/categories.ts`, `ALL_CATEGORIES` in
-  `pcf/.../categories.ts`, and the SharePoint choice values (`sharepoint/Setup-ContactsLibrary.ps1` and `Test-ContactsLibrary.ps1`).
+- Adding a category or a hosting table is **configuration, not code** (docs/CONFIGURATION.md §3). If you change the
+  configuration **schema**, update `dataverse/provision.mjs` (+ its tests), `dataverse/seed.json`,
+  `backend/src/lib/tableConfig.ts`, `pcf/.../services/SettingsService.ts` and docs/CONFIGURATION.md together.
+  `node --test dataverse/provision.test.mjs` must pass.

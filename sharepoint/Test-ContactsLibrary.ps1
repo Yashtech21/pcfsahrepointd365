@@ -38,7 +38,7 @@ Report (-not $list.EnableModeration) "'Require content approval' is off"
 
 # Columns (internal names, types, index, not required)
 $expected = @(
-    @{ Name = "DocCategory";    Type = "Choice"; Indexed = $true  },
+    @{ Name = "DocCategory";    Type = "Text";   Indexed = $true  },
     @{ Name = "SourceEntity";   Type = "Text";   Indexed = $false },
     @{ Name = "SourceRecordId"; Type = "Text";   Indexed = $true  },
     @{ Name = "ContactGuid";    Type = "Text";   Indexed = $true  }
@@ -49,20 +49,13 @@ foreach ($c in $expected) {
         Report $false "Column with internal name '$($c.Name)' exists (create it with this internal name, then rename the display name)"
         continue
     }
-    Report ($f.TypeAsString -eq $c.Type) "$($c.Name) is type $($c.Type) (found $($f.TypeAsString))"
+    Report ($f.TypeAsString -eq $c.Type) "$($c.Name) is type $($c.Type) (found $($f.TypeAsString)$(if ($f.TypeAsString -eq 'Choice') { '; change it to Single line of text' }))"
     Report (-not $f.Required) "$($c.Name) is not Required"
     if ($c.Indexed) { Report ([bool]$f.Indexed) "$($c.Name) is indexed" }
 }
 
-# Choice values must match backend/src/lib/categories.ts exactly
-$choiceField = Get-PnPField -List $LibraryName -Identity "DocCategory" -ErrorAction SilentlyContinue
-if ($choiceField) {
-    $xml = [xml]$choiceField.SchemaXml
-    $actual = @($xml.Field.CHOICES.CHOICE)
-    $wanted = @("Offer Letter", "Commissions", "Payslip", "Resignation Letter", "FinCEN_U4", "Misc")
-    $missing = $wanted | Where-Object { $actual -cnotcontains $_ }
-    Report ($missing.Count -eq 0) "DocCategory has all choices ($($wanted -join ', '))$(if ($missing) { " - missing: $($missing -join ', ')" })"
-}
+# DocCategory is text: category values come from Dataverse (ce_documentcategory), so there is no
+# choice list to compare. A Choice column would reject categories added later in Dataverse.
 
 # Sites.Selected grant for the backend app
 if ($BackendAppId) {

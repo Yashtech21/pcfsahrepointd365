@@ -52,7 +52,11 @@ anything unexpected → `500`. Every URL returned to the browser (preview, downl
 
 - `contactId`, `sourceRecordId`: GUID (braces and case are normalised).
 - `sourceEntity`: `^[a-z][a-z0-9_]{0,63}$`.
-- `category`: must be a key of `CATEGORY_FOLDERS`.
+- `sourceEntity` must have an **active** Document Manager Configuration row → otherwise `400 Document management is
+  not configured for table "x"`.
+- `category` must be an **active** category in that row's Allowed Categories → otherwise `400 Category "x" is not
+  allowed on <table>`. Its folder comes from the category's Folder Path (`safeFolderPath`).
+- Size limit = min(`MAX_UPLOAD_MB`, the row's Max Upload) → `413 File is too large (limit N MB for <table>)`.
 - `fileName`: required. It is sanitised by `sanitizeName` (`naming.ts`): illegal characters, control characters,
   the `~$` prefix, `_vti_`, leading or trailing dots/spaces and reserved device names are handled, and the
   extension is kept when shortening.
@@ -127,12 +131,26 @@ App-only **`Sites.Selected`** with a **Write** grant on `/sites/AdvisorManagemen
 
 ---
 
-## Part C: Dataverse (client only, read-only)
+## Part C: Dataverse
+
+### Control (as the signed-in user, read-only, `services/SettingsService.ts`, cached per page load)
 
 | Purpose | Call |
 |---|---|
 | Entity display name | `context.utils.getEntityMetadata(logicalName)` → `DisplayName` |
 | User UPN (MSAL login hint) | `context.webAPI.retrieveRecord("systemuser", userId, "?$select=domainname")` |
+| Connection settings | `retrieveMultipleRecords("environmentvariabledefinition", …$filter=schemaname eq 'ce_DocManager…'&$expand=environmentvariabledefinition_environmentvariablevalue)`. The current value wins over the default; non-empty form properties override both |
+| Table configuration | `retrieveMultipleRecords("ce_documentmanagerconfig", …$filter=ce_tablelogicalname eq '<table>' and statecode eq 0&$expand=ce_documentmanagerconfig_documentcategory(…))` |
+| Category catalog | `retrieveMultipleRecords("ce_documentcategory", "?$select=ce_name,ce_value,ce_color,ce_sortorder,statecode")` |
+
+### Backend (as its application user, `backend/src/lib/tableConfig.ts`, `dataverse()` in `graph.ts`)
+
+| Purpose | Call |
+|---|---|
+| Table configuration + allowed categories | `GET {DATAVERSE_URL}/api/data/v9.2/ce_documentmanagerconfigs?$filter=ce_tablelogicalname eq '<table>' and statecode eq 0&$expand=ce_documentmanagerconfig_documentcategory($select=ce_name,ce_value,ce_folderpath,ce_color,ce_sortorder,statecode)` |
+
+Token: client credentials for `{DATAVERSE_URL}/.default` (same app registration as Graph). Same timeout and retry
+rules as Graph. Errors surface as `Dataverse error: …`.
 
 There is no Dataverse Custom API or Power Automate flow in this design (that was "Option B" in the original spec and
 was not built).

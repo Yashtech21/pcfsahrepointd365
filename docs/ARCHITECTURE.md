@@ -52,25 +52,23 @@ not used). Everything for an advisor lives under the parent Contact:
 - Files are validated before anything is written (`fileRules.ts`: blocked types, executable content,
   content/extension match). After upload, the stored size must equal the received size, otherwise the file is deleted.
 
-### Category → folder (server is the source of truth: `backend/src/lib/categories.ts`)
+### Categories, folders and tables come from Dataverse
 
-| `DocCategory` value | Label in UI | Folder | Offered on |
-|---|---|---|---|
-| `Offer Letter` | Offer Letter | `Offer Letters/` | opportunity |
-| `Commissions` | Commissions | `Commissions/` | opportunity |
-| `Payslip` | Payslip | `Onboarding Documents/Payslips/` | any other entity |
-| `Resignation Letter` | Resignation Letter | `Onboarding Documents/Resignation Letters/` | any other entity |
-| `FinCEN_U4` | FinCEN / U4 Verification | `Onboarding Documents/FinCEN_U4/` | any other entity |
-| `Misc` | Miscellaneous | `Miscellaneous/` | all |
-
-"Offered on" is the default and can be overridden per entity with the control's `categoryConfig` JSON property.
-Unknown names are ignored on the client and rejected (400) by the server.
+Categories (`ce_documentcategory`: value, label, folder path, colour, order) and per-table configuration
+(`ce_documentmanagerconfig`: table logical name, **Contact lookup column**, max upload, allowed categories) are
+Dataverse data. See [CONFIGURATION.md](CONFIGURATION.md).
+- **Backend** (`backend/src/lib/tableConfig.ts`) reads them as its application user, cached per table for
+  `CONFIG_CACHE_SECONDS`, and is the enforcement point: the table must be configured and active, the category must be
+  active and allowed on that table, and the folder path is sanitised (`safeFolderPath`).
+- **Control** (`services/SettingsService.ts`) reads them as the user, for the dropdown, labels, colours and the
+  client-side size check. Inactive categories still label existing documents.
+- The starting data is `dataverse/seed.json`, which is also the backend's local-dev config (`DOC_CONFIG_FILE`).
 
 ## 3. SharePoint columns (library `Contacts`)
 
 | Internal name | Type | Indexed | Value written on upload |
 |---|---|---|---|
-| `DocCategory` | Choice (values above) | yes | category value |
+| `DocCategory` | Single line of text | yes | category **Value** from Dataverse |
 | `SourceEntity` | Single line of text | no | logical name of the hosting entity, e.g. `opportunity`, `ce_advisoronboarding` |
 | `SourceRecordId` | Single line of text | yes | lowercase GUID of the hosting record |
 | `ContactGuid` | Single line of text | yes | lowercase GUID of the Contact |

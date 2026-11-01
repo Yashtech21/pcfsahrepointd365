@@ -5,7 +5,7 @@ import {
 } from "@fluentui/react-components";
 import { ArrowSortRegular, ArrowSyncRegular, FilterRegular, SearchRegular } from "./Icons";
 import { IDocumentItem, IHostContext } from "../types";
-import { ICategory, categoryLabel } from "../categories";
+import { ICategory, useCategoryCatalog } from "../categories";
 import { DocumentApi, IPreviewTarget } from "../services/DocumentApi";
 import { TimeoutError } from "../services/http";
 import { formatSize, prettifyEntityName } from "../utils";
@@ -72,15 +72,20 @@ function useDebounced<T>(value: T, ms: number): T {
 export interface IDocumentManagerProps {
     host: IHostContext;
     categories: ICategory[];
-    api: DocumentApi | null;
-    configError?: string;
+    api: DocumentApi;
     getEntityDisplayName: (logicalName: string) => Promise<string>;
+    /** Per-table upload limit from configuration (the server enforces it too). */
+    maxUploadBytes?: number;
+    /** Non-blocking configuration warning shown above the grid. */
+    notice?: string;
 }
 
 export const DocumentManager = React.memo(function DocumentManager(
-    { host, categories, api, configError, getEntityDisplayName }: IDocumentManagerProps,
+    { host, categories, api, getEntityDisplayName, maxUploadBytes, notice }: IDocumentManagerProps,
 ) {
     const s = useStyles();
+    const catalog = useCategoryCatalog();
+    const categoryLabel = catalog.label;
     const [scope, setScope] = React.useState<Scope>(host.recordId ? "record" : "all");
     const [documents, setDocuments] = React.useState<IDocumentItem[]>([]);
     const [loading, setLoading] = React.useState(false);
@@ -176,7 +181,7 @@ export const DocumentManager = React.memo(function DocumentManager(
         const m = new Map<string, number>();
         scopeDocs.forEach(d => m.set(d.category, (m.get(d.category) ?? 0) + 1));
         return Array.from(m.entries()).sort((a, b) => b[1] - a[1] || categoryLabel(a[0]).localeCompare(categoryLabel(b[0])));
-    }, [scopeDocs]);
+    }, [scopeDocs, categoryLabel]);
 
     // Drop a category filter that no longer matches anything in this tab.
     React.useEffect(() => {
@@ -201,7 +206,7 @@ export const DocumentManager = React.memo(function DocumentManager(
                 default: return (new Date(a.uploadDate).getTime() - new Date(b.uploadDate).getTime()) * dir;
             }
         });
-    }, [scopeDocs, categoryFilter, filter, sort, sourceLabel]);
+    }, [scopeDocs, categoryFilter, filter, sort, sourceLabel, categoryLabel]);
 
     const displayedBytes = React.useMemo(() => displayed.reduce((n, d) => n + (d.size || 0), 0), [displayed]);
     const countText = displayed.length === scopeDocs.length
@@ -269,7 +274,7 @@ export const DocumentManager = React.memo(function DocumentManager(
             setInfo(`${files.length} file(s) uploaded as "${categoryLabel(category)}".`);
         }
         return stillFailed;
-    }, [api, category, host, loadDocs]);
+    }, [api, category, host, loadDocs, categoryLabel]);
 
     const openPreview = React.useCallback(async (doc: IDocumentItem) => {
         if (!api) return;
@@ -316,13 +321,10 @@ export const DocumentManager = React.memo(function DocumentManager(
         }
     }, [api, deleting]);
 
-    if (configError) {
-        return <MessageBar intent="warning"><MessageBarBody>{configError}</MessageBarBody></MessageBar>;
-    }
-
     const uploadDisabledReason = !host.contactId
         ? "Select a contact on this form to manage documents."
-        : !host.recordId ? "Save this record before uploading documents." : undefined;
+        : !host.recordId ? "Save this record before uploading documents."
+        : !categories.length ? "No document categories are enabled for this table. Ask an administrator to add some." : undefined;
     const sortIcon = (k: SortKey) => (sort.key === k ? (sort.asc ? " ↑" : " ↓") : "");
     const firstLoad = loading && documents.length === 0;
 
@@ -334,7 +336,10 @@ export const DocumentManager = React.memo(function DocumentManager(
                 categories={categories} category={category} onCategoryChange={setCategory}
                 contactName={host.contactName} disabledReason={uploadDisabledReason}
                 busy={uploading} progress={uploadProgress} onUpload={handleUpload}
+                maxFileBytes={maxUploadBytes}
             />
+
+            {notice && <MessageBar intent="warning"><MessageBarBody>{notice}</MessageBarBody></MessageBar>}
 
             {loadError && (
                 <MessageBar intent="error">

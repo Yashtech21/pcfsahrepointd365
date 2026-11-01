@@ -23,7 +23,8 @@ export function retryDelayMs(header: string | null, attempt: number, now = Date.
 }
 
 export class GraphError extends Error {
-    constructor(public status: number, message: string, public code?: string) { super(message); }
+    /** `service` names the upstream in user-facing errors ("SharePoint" for Graph, or "Dataverse"). */
+    constructor(public status: number, message: string, public code?: string, public service = "SharePoint") { super(message); }
 }
 
 export type RetryDecision = "retry" | "fail";
@@ -52,9 +53,12 @@ export function isTimeout(e: unknown): boolean {
 
 export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-async function token(): Promise<string> {
+const GRAPH_SCOPE = "https://graph.microsoft.com/.default";
+
+/** App-only token for a resource scope. @azure/identity caches and refreshes tokens per scope. */
+async function token(scope: string): Promise<string> {
     credential ??= new ClientSecretCredential(config.tenantId, config.clientId, config.clientSecret);
-    const t = await credential.getToken("https://graph.microsoft.com/.default");
+    const t = await credential.getToken(scope);
     return t.token;
 }
 
@@ -73,8 +77,24 @@ export interface GraphInit extends RequestInit {
  * failures are retried per retryDecision(). `pathOrUrl` may be relative to /v1.0 or an absolute nextLink.
  * Always throws GraphError on failure (504 for timeouts, 502 for network errors).
  */
-export async function graph<T = unknown>(pathOrUrl: string, init: GraphInit = {}): Promise<T> {
+export function graph<T = unknown>(pathOrUrl: string, init: GraphInit = {}): Promise<T> {
     const url = pathOrUrl.startsWith("https://") ? pathOrUrl : `${GRAPH}${pathOrUrl}`;
+    return request<T>(url, init, GRAPH_SCOPE, "SharePoint");
+}
+
+/**
+ * Calls the Dataverse Web API (v9.2) as the backend's application user, with the same timeout/retry rules.
+ * `path` is relative to /api/data/v9.2, e.g. "/ce_documentmanagerconfigs?$filter=...".
+ */
+export function dataverse<T = unknown>(path: string, init: GraphInit = {}): Promise<T> {
+    const org = config.dataverseUrl.replace(/\/+$/, "");
+    return request<T>(`${org}/api/data/v9.2${path}`, {
+        ...init,
+        headers: { Accept: "application/json", "OData-Version": "4.0", "OData-MaxVersion": "4.0", ...(init.headers as Record<string, string>) },
+    }, `${org}/.default`, "Dataverse");
+}
+
+async function request<T>(url: string, init: GraphInit, scope: string, service: string): Promise<T> {
     const method = (init.method ?? "GET").toUpperCase();
     const idempotent = init.idempotent ?? ["GET", "HEAD", "DELETE", "PATCH"].includes(method);
     const timeoutMs = init.timeoutMs ?? REQUEST_TIMEOUT_MS;
@@ -91,7 +111,7 @@ export async function graph<T = unknown>(pathOrUrl: string, init: GraphInit = {}
         let res: Response;
         try {
             // Token fetched per attempt: a long retry sequence must not reuse an expired token.
-            const headers = { Authorization: `Bearer ${await token()}`, ...extraHeaders };
+            const headers = { Authorization: `Bearer ${await token(scope)}`, ...extraHeaders };
             res = await fetch(url, { ...fetchInit, method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
         } catch (e) {
             const outcome = isTimeout(e) ? "timeout" : "network";
@@ -100,8 +120,8 @@ export async function graph<T = unknown>(pathOrUrl: string, init: GraphInit = {}
                 continue;
             }
             throw outcome === "timeout"
-                ? new GraphError(504, `Microsoft Graph did not respond within ${timeoutMs / 1000}s`, "timeout")
-                : new GraphError(502, `Could not reach Microsoft Graph: ${(e as Error).message}`, "network");
+                ? new GraphError(504, `${service} did not respond within ${timeoutMs / 1000}s`, "timeout", service)
+                : new GraphError(502, `Could not reach ${service}: ${(e as Error).message}`, "network", service);
         }
 
         if (!res.ok && retryDecision(res.status, idempotent, attempt) === "retry") {
@@ -115,7 +135,7 @@ export async function graph<T = unknown>(pathOrUrl: string, init: GraphInit = {}
                 const e = (await res.json()) as { error?: { message?: string; code?: string } };
                 message = e.error?.message ?? message; code = e.error?.code;
             } catch { /* non-JSON error */ }
-            throw new GraphError(res.status, message, code);
+            throw new GraphError(res.status, message, code, service);
         }
         if (res.status === 204) return undefined as T;
         const ct = res.headers.get("content-type") ?? "";

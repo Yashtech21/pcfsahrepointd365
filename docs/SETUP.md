@@ -14,7 +14,7 @@ D365 form ──► PCF control ──(user token, MSAL SSO)──► Azure Func
 | 2. SharePoint library, columns, grant | SharePoint + PowerShell | SharePoint Administrator |
 | 3. Azure Function | Azure portal + CLI | Azure Contributor |
 | 4. Build and import the control | Developer machine + Power Apps | System Customizer |
-| 5. Dataverse tables and columns | Power Apps maker portal | System Customizer |
+| 5. Dataverse tables, configuration and environment variables | Power Apps + `dataverse/provision.mjs` | System Administrator |
 | 6. Add the control to forms | Power Apps form designer | System Customizer |
 | 7. Users and security | Entra + D365 admin | Admins |
 | 8. Smoke test | D365 | Anyone with access |
@@ -70,7 +70,8 @@ The script creates the `Contacts` library if it's missing. It then adds the four
 
 If you can't run the script, follow PREREQUISITES §3 exactly:
 1. Create each column with the **internal** name (`DocCategory`, `SourceEntity`, `SourceRecordId`, `ContactGuid`),
-   then rename the display name. `DocCategory` is a single Choice with exactly the six values.
+   then rename the display name. All four are **Single line of text** (categories live in Dataverse, so
+   `DocCategory` isn't a Choice).
 2. **Library settings → Indexed columns → Create a new index** for `DocCategory`, `SourceRecordId`, `ContactGuid`.
 3. **Library settings → Versioning settings**: *Require content approval* = **No**, *Require check out* = **No**.
 4. Grant Sites.Selected write. A SharePoint admin runs, e.g.:
@@ -105,6 +106,8 @@ If you can't run the script, follow PREREQUISITES §3 exactly:
 | `SP_HOSTNAME` | `contoso.sharepoint.com` |
 | `SP_SITE_PATH` | `/sites/AdvisorManagement` |
 | `SP_LIBRARY_NAME` | `Contacts` |
+| `DATAVERSE_URL` | `https://contoso.crm.dynamics.com` (configuration source; the app user is created in 5c) |
+| `CONFIG_CACHE_SECONDS` | *(optional, default 300)* how long table configuration is cached |
 | `API_AUDIENCE` | `api://<backend-client-id>,<backend-client-id>` (accepted token audiences) |
 | `REQUIRE_AUTH` | `true` (set `false` only for local development) |
 | `REQUIRED_ROLE` | *(optional)* `DocManager.User` |
@@ -162,7 +165,9 @@ For quick dev iterations you can instead run `pac auth create --url https://<org
 
 ---
 
-## 5. Dataverse tables and columns
+## 5. Dataverse tables, configuration and environment variables
+
+### 5a. Hosting tables
 
 **Opportunity:** nothing to create. It has the OOB **Contact** lookup (`parentcontactid`).
 
@@ -176,6 +181,37 @@ For quick dev iterations you can instead run `pac auth create --url https://<org
 **Any other table** where you want the control needs a **Lookup → Contact** column the same way.
 
 ✅ **Check:** you can create an Advisor Onboarding record and pick a Contact in *Recruit*.
+
+### 5b. Configuration tables, environment variables, role and seed data
+
+Run as **your own** System Administrator account (details in [CONFIGURATION.md](CONFIGURATION.md)). First check
+`dataverse/seed.json`: `tableLogicalName` and `contactLookupColumn` must match your real tables, e.g.
+`ce_advisoronboarding` / `ce_recruitid`.
+
+```bash
+az login
+node dataverse/provision.mjs all --org https://contoso.crm.dynamics.com --dry-run   # review
+node dataverse/provision.mjs all --org https://contoso.crm.dynamics.com             # apply
+```
+
+This creates the **Document Category** and **Document Manager Configuration** tables, the environment variables
+`ce_DocManagerApiBaseUrl`, `ce_DocManagerTenantId`, `ce_DocManagerClientId` and `ce_DocManagerApiScope` (no values
+yet), the **Document Manager Reader** role, and the starting categories and table rows.
+
+### 5c. Connect it (once the app registrations and Function App exist)
+
+```bash
+node dataverse/provision.mjs set-env --org https://contoso.crm.dynamics.com \
+  --api-base-url https://<function-app>.azurewebsites.net/api --tenant-id <tenant-guid> \
+  --client-id <spa-client-id> --api-scope api://<backend-client-id>/user_impersonation
+node dataverse/provision.mjs app-user --org https://contoso.crm.dynamics.com --app-id <backend-client-id>
+```
+
+Then set `DATAVERSE_URL` on the Function App (step 3), so the backend reads the same configuration.
+
+✅ **Check:** in the app, **Document Manager Configurations** has a row per table with the right **Contact Lookup
+Column**, each with its Allowed Categories. **Solutions → DocumentManager → Environment variables** shows four
+variables with current values.
 
 ---
 
@@ -191,16 +227,9 @@ Repeat for the **Opportunity** main form and the **Advisor Onboarding** main for
    Onboarding) into the new tab's section. Yes, the same column a second time.
 5. Select that new field. In the right pane: **Components → + Component**. If *Categorized Document Manager* isn't
    listed, choose **Get more components**, find it on the *Build by my org* tab, **Add** it, then select it.
-6. Fill in the properties (**Static value** for each):
-
-| Property | Value |
-|---|---|
-| Contact Lookup | *(already bound to the column you dropped)* |
-| Document API Base URL | `https://<function-app>.azurewebsites.net/api` |
-| Entra Tenant ID | tenant GUID |
-| SPA Client ID | `D365-SP-DocManager-Client` client id |
-| API Scope | `api://<backend-client-id>/user_impersonation` |
-| Category Config | *(optional)* e.g. `{"ce_advisoronboarding":["Payslip","Resignation Letter","FinCEN_U4","Misc"]}` |
+6. Properties: **Contact Lookup** is already bound to the column you dropped. **Leave the four connection
+   properties empty**; they come from the environment variables. Fill them only to override one form, e.g. while
+   testing against a dev API.
 
 7. Tick **Web**, **Mobile** and **Tablet** (or just Web). Click **Done**.
 8. With the field selected: **Properties → Hide label** = on. Set the section/field to use the full width.
@@ -208,8 +237,11 @@ Repeat for the **Opportunity** main form and the **Advisor Onboarding** main for
 10. **Save and publish.**
 
 ✅ **Check:** open an existing Opportunity that has a Contact. The new tab shows skeleton cards, then either
-documents or "No documents found". You should **not** see "is not configured" (property missing) or a sign-in popup
-every time (SPA redirect URI missing for this org).
+documents or "No documents found". You should **not** see:
+- "isn't connected yet": environment variables are missing (5c);
+- "Not set up for this table": no active configuration row for the table (5b);
+- a lookup mismatch warning: the form's bound column differs from the row's Contact Lookup Column;
+- a sign-in popup every time: the SPA redirect URI is missing for this org (1b).
 
 ---
 
@@ -249,7 +281,11 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for the full list. The most common 
 
 | Symptom | Cause / fix |
 |---|---|
-| "Categorized Document Manager is not configured. Missing: …" | A control property is empty on that form (step 6.6) |
+| "The Document Manager isn't connected yet. Set these environment variables: …" | Run `provision.mjs set-env` (5c) or set the values in the solution |
+| "Not set up for this table" | Add or activate a Document Manager Configuration row for that table (5b) |
+| "Could not read Document Manager configuration" | Solution not provisioned (5b), or the user lacks the **Document Manager Reader** role |
+| Upload: `400 Category "x" is not allowed on …` | Add the category to that table's Allowed Categories |
+| Upload: `Dataverse error: …` / `502` | Backend can't read configuration: check `DATAVERSE_URL` and the application user (5c) |
 | Sign-in popup every session | SPA redirect URI missing for this org URL (1b.2) or third-party cookies blocked |
 | `401 Invalid or expired token` | `API_AUDIENCE` doesn't match the control's *API Scope* |
 | `403 Caller lacks the required role` | User isn't assigned `DocManager.User` (step 7.2) |

@@ -1,10 +1,10 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/functions";
 import { AuthError, getCaller } from "../lib/auth";
-import { folderForCategory } from "../lib/categories";
 import { config } from "../lib/config";
 import { RejectedFileError } from "../lib/errors";
 import { GraphError } from "../lib/graph";
 import { isValidEntityName, normalizeGuid } from "../lib/naming";
+import { ConfigError, planUpload } from "../lib/tableConfig";
 import * as sp from "../lib/sharepoint";
 
 type Handler = (req: HttpRequest, ctx: InvocationContext) => Promise<HttpResponseInit>;
@@ -22,14 +22,16 @@ function handler(fn: Handler): Handler {
             return await fn(req, ctx);
         } catch (e) {
             if (e instanceof AuthError) return json(e.status, { error: e.message });
-            if (e instanceof BadRequest || e instanceof sp.UnsupportedItemError) return json(400, { error: e.message });
+            if (e instanceof BadRequest || e instanceof sp.UnsupportedItemError || e instanceof ConfigError) {
+                return json(400, { error: e.message });
+            }
             if (e instanceof RejectedFileError) return json(415, { error: e.message });
             if (e instanceof sp.DeleteNotConfirmedError) return json(409, { error: e.message });
             if (e instanceof GraphError) {
                 ctx.warn(`Graph error ${e.status} ${e.code ?? ""}: ${e.message}`);
                 const status = e.status === 404 ? 404 : e.status === 403 ? 403 : e.status === 504 ? 504
                     : e.status === 413 || e.status === 507 ? 507 : 502;
-                return json(status, { error: e.status === 404 ? "Document not found" : `SharePoint error: ${e.message}` });
+                return json(status, { error: e.status === 404 ? "Document not found" : `${e.service} error: ${e.message}` });
             }
             ctx.error(e);
             return json(500, { error: "Unexpected server error" });
@@ -73,19 +75,21 @@ app.http("uploadDocument", {
         const sourceEntity = (q.get("sourceEntity") ?? "").toLowerCase();
         if (!isValidEntityName(sourceEntity)) throw new BadRequest("Invalid sourceEntity");
         const category = q.get("category") ?? "";
-        const categoryFolder = folderForCategory(category);
-        if (!categoryFolder) throw new BadRequest(`Unknown category "${category}"`);
         const fileName = (q.get("fileName") ?? "").trim();
         if (!fileName) throw new BadRequest("fileName is required");
 
+        // Table must be configured, category active and allowed for it (Dataverse configuration).
+        const plan = await planUpload(sourceEntity, category, config.maxUploadBytes);
+        const tooLarge = () => json(413, { error: `File is too large (limit ${Math.round(plan.maxBytes / 1024 / 1024)} MB for ${plan.table.name})` });
+
         const declared = Number(req.headers.get("content-length") ?? "0");
-        if (declared > config.maxUploadBytes) return json(413, { error: "File is too large" });
+        if (declared > plan.maxBytes) return tooLarge();
         const content = Buffer.from(await req.arrayBuffer());
         if (!content.length) throw new BadRequest("Empty file");
-        if (content.length > config.maxUploadBytes) return json(413, { error: "File is too large" });
+        if (content.length > plan.maxBytes) return tooLarge();
 
         const doc = await sp.uploadDocument({
-            fileName, content, category, categoryFolder, contactId,
+            fileName, content, category, categoryFolder: plan.folderPath, contactId,
             contactName: q.get("contactName") ?? "", sourceEntity, sourceRecordId,
         });
         return json(201, doc);

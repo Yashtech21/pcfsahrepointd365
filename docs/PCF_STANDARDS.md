@@ -7,8 +7,12 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
 - Dynamics calls `updateView(context)` many times during form load and on every field change.
 - `updateView` **only builds props**. It must:
   - reuse the cached `host` object unless `entityName`, `recordId`, `contactId` or `contactName` changed;
-  - reuse the cached `categories` array unless `entityName` or `categoryConfig` changed;
-  - reuse the single `DocumentApi` unless one of `apiBaseUrl`, `tenantId`, `clientId` or `apiScope` changed.
+  - reuse the cached `overrides` object (the optional connection properties) unless one of them changed;
+  - keep the single `services` object (`SettingsService`, display-name cache, UPN promise) created in `init`.
+- Configuration (environment variables, table row, category catalog) is loaded once by `ControlRoot` via
+  `SettingsService` (cached per page load). `ControlRoot` builds the `DocumentApi` with `useMemo` keyed on the
+  resolved settings. Categories reach components through `CategoryCatalogContext` (`useCategoryCatalog()`): never
+  hard-code category values, labels or colours.
 - **Never fetch in `updateView`.** Data loading happens in `DocumentManager` in a `useEffect` keyed on
   `[api, host.contactId]`.
 - `DocumentApi.listByContact` shares one in-flight request per `contactId`. `DocumentManager` uses a

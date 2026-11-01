@@ -1,0 +1,25 @@
+{
+  "$comment": "Initial configuration loaded by `node dataverse/provision.mjs seed`. After seeding, manage categories and tables in the model-driven app; this file is only the starting point (and the local-dev config for the backend via DOC_CONFIG_FILE).",
+  "categories": [
+    { "value": "Offer Letter",       "name": "Offer Letter",             "folderPath": "Offer Letters",                          "color": "#0f6cbd", "sortOrder": 10 },
+    { "value": "Commissions",        "name": "Commissions",              "folderPath": "Commissions",                            "color": "#8a3ab9", "sortOrder": 20 },
+    { "value": "Payslip",            "name": "Payslip",                  "folderPath": "Onboarding Documents/Payslips",          "color": "#107c10", "sortOrder": 30 },
+    { "value": "Resignation Letter", "name": "Resignation Letter",       "folderPath": "Onboarding Documents/Resignation Letters", "color": "#c50f1f", "sortOrder": 40 },
+    { "value": "FinCEN_U4",          "name": "FinCEN / U4 Verification", "folderPath": "Onboarding Documents/FinCEN_U4",         "color": "#ca5010", "sortOrder": 50 },
+    { "value": "Misc",               "name": "Miscellaneous",            "folderPath": "Miscellaneous",                          "color": "#8a8886", "sortOrder": 90 }
+  ],
+  "tables": [
+    {
+      "tableLogicalName": "opportunity",
+      "name": "Opportunity",
+      "contactLookupColumn": "parentcontactid",
+      "categories": ["Offer Letter", "Commissions", "Misc"]
+    },
+    {
+      "tableLogicalName": "ce_advisoronboarding",
+      "name": "Advisor Onboarding",
+      "contactLookupColumn": "ce_recruitid",
+      "categories": ["Payslip", "Resignation Letter", "FinCEN_U4", "Misc"]
+    }
+  ]
+}

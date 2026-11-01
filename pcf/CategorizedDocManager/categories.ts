@@ -1,61 +1,54 @@
+import * as React from "react";
+
 /**
- * Categories the control can offer. `value` is written to the DocCategory choice column.
- * Folder placement is decided server-side (backend/src/lib/categories.ts), which is the source of
- * truth: a new category must be added there first, then here.
+ * Categories come from Dataverse (ce_documentcategory), loaded by SettingsService. Nothing here is
+ * hard-coded any more: admins add, rename, recolour or deactivate categories in the app.
+ * `value` is what is stored in SharePoint (DocCategory); the backend decides the folder.
  */
 export interface ICategory {
     value: string;
     label: string;
+    color?: string;
+    sortOrder: number;
 }
 
-export const ALL_CATEGORIES: Record<string, ICategory> = {
-    "Offer Letter": { value: "Offer Letter", label: "Offer Letter" },
-    Commissions: { value: "Commissions", label: "Commissions" },
-    Payslip: { value: "Payslip", label: "Payslip" },
-    "Resignation Letter": { value: "Resignation Letter", label: "Resignation Letter" },
-    FinCEN_U4: { value: "FinCEN_U4", label: "FinCEN / U4 Verification" },
-    Misc: { value: "Misc", label: "Miscellaneous" },
-};
-
-const DEFAULT_BY_ENTITY: Record<string, string[]> = {
-    opportunity: ["Offer Letter", "Commissions", "Misc"],
-    "*": ["Payslip", "Resignation Letter", "FinCEN_U4", "Misc"],
-};
-
-export function categoriesFor(entityName: string, overrideJson?: string | null): ICategory[] {
-    let map = DEFAULT_BY_ENTITY;
-    if (overrideJson && overrideJson.trim()) {
-        try {
-            map = { ...DEFAULT_BY_ENTITY, ...(JSON.parse(overrideJson) as Record<string, string[]>) };
-        } catch {
-            console.warn("CategorizedDocManager: invalid categoryConfig JSON, using defaults");
-        }
-    }
-    const keys = map[entityName.toLowerCase()] ?? map["*"];
-    const unknown = keys.filter(k => !ALL_CATEGORIES[k]);
-    if (unknown.length) {
-        // The server would reject uploads for these, so don't offer them.
-        console.warn(`CategorizedDocManager: ignoring unknown categories in categoryConfig: ${unknown.join(", ")}`);
-    }
-    const result = keys.filter(k => ALL_CATEGORIES[k]).map(k => ALL_CATEGORIES[k]);
-    return result.length ? result : (DEFAULT_BY_ENTITY[entityName.toLowerCase()] ?? DEFAULT_BY_ENTITY["*"]).map(k => ALL_CATEGORIES[k]);
+export interface ICategoryCatalog {
+    label(value: string): string;
+    color(value: string): { backgroundColor: string; color: string };
 }
 
-export function categoryLabel(value: string): string {
-    return ALL_CATEGORIES[value]?.label ?? value;
+/** Used when a category has no colour configured: stable per value, all readable with white text. */
+const FALLBACK_PALETTE = ["#0f6cbd", "#8a3ab9", "#107c10", "#c50f1f", "#ca5010", "#038387", "#5c2e91", "#986f0b"];
+
+function hash(s: string): number {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return Math.abs(h);
 }
 
-/** Badge colours roughly matching the mockup (background, foreground). */
-const COLORS: Record<string, [string, string]> = {
-    "Offer Letter": ["#0f6cbd", "#ffffff"],
-    Commissions: ["#8a3ab9", "#ffffff"],
-    Payslip: ["#107c10", "#ffffff"],
-    "Resignation Letter": ["#c50f1f", "#ffffff"],
-    FinCEN_U4: ["#ca5010", "#ffffff"],
-    Misc: ["#e1dfdd", "#323130"],
-};
-
-export function categoryColor(value: string): { backgroundColor: string; color: string } {
-    const [backgroundColor, color] = COLORS[value] ?? ["#edebe9", "#323130"];
-    return { backgroundColor, color };
+/** Picks black or white text for a hex background (WCAG relative luminance). */
+function textOn(hex: string): string {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return "#ffffff";
+    const n = parseInt(m[1], 16);
+    const lin = (c: number) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    const l = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+    return l > 0.4 ? "#242424" : "#ffffff";
 }
+
+export function createCatalog(categories: ICategory[]): ICategoryCatalog {
+    const byValue = new Map(categories.map(c => [c.value, c]));
+    return {
+        // Unknown values (e.g. a deleted category, or a file tagged in SharePoint) show their raw value.
+        label: (v) => byValue.get(v)?.label ?? v,
+        color: (v) => {
+            if (!v) return { backgroundColor: "#e1dfdd", color: "#323130" };
+            const bg = byValue.get(v)?.color || FALLBACK_PALETTE[hash(v) % FALLBACK_PALETTE.length];
+            return { backgroundColor: bg, color: textOn(bg) };
+        },
+    };
+}
+
+export const CategoryCatalogContext = React.createContext<ICategoryCatalog>(createCatalog([]));
+
+export const useCategoryCatalog = () => React.useContext(CategoryCatalogContext);

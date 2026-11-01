@@ -26,15 +26,16 @@ SharePoint document grid with:
 
 ## Before you start (summary of [PREREQUISITES.md](docs/PREREQUISITES.md))
 
-- **SharePoint:** a `Contacts` library on `/sites/AdvisorManagement` with columns **`DocCategory`** (Choice: Offer Letter,
-  Commissions, Payslip, Resignation Letter, FinCEN_U4, Misc), **`SourceEntity`**, **`SourceRecordId`** and
-  **`ContactGuid`** (text). These are the exact internal names. `DocCategory`, `SourceRecordId` and `ContactGuid` are
+- **SharePoint:** a `Contacts` library on `/sites/AdvisorManagement` with text columns **`DocCategory`**,
+  **`SourceEntity`**, **`SourceRecordId`** and **`ContactGuid`**. These are the exact internal names. `DocCategory`, `SourceRecordId` and `ContactGuid` are
   indexed, and none of the four is required. Check-out and content approval must be **off**. The backend app needs
   Sites.Selected **Write** on the site. `sharepoint/Setup-ContactsLibrary.ps1` sets this up and
   `Test-ContactsLibrary.ps1` verifies it.
 - **Dynamics 365:** a model-driven app; Opportunity (uses the OOB `parentcontactid` lookup); an **Advisor Onboarding**
   table with a **lookup to Contact**; the lookup placed on each main form **twice** (once editable, once with the
   control); users need Read on Contact.
+- **Dataverse configuration:** run `node dataverse/provision.mjs all --org <url>` as a System Administrator
+  (configuration tables, environment variables, **Document Manager Reader** role, seed data).
 - **Entra ID:** a backend app (`Sites.Selected` + exposed `user_impersonation` scope) and an SPA client app with a
   redirect URI for every D365 org URL.
 - **Azure:** a Function App (Node 20, Functions v4) with Key Vault for the secret and CORS for the org URLs.
@@ -45,29 +46,25 @@ SharePoint document grid with:
 |---|---|
 | `pcf/` | The PCF control (React 16.14 + Fluent UI v9 platform libraries, TypeScript). Production bundle ≈ 330 KB / 80 KB gzipped, of which ≈ 284 KB is MSAL; React/Fluent are supplied by Dynamics and icons are inlined. |
 | `backend/` | Azure Function (Node 20, TypeScript) that talks to SharePoint via Microsoft Graph with an app-only, `Sites.Selected` token |
+| `dataverse/provision.mjs`, `dataverse/seed.json` | Creates the configuration tables, environment variables, role and application user in Dataverse; starting categories and tables |
 | `sharepoint/Setup-ContactsLibrary.ps1` | PnP PowerShell: library columns, indexes, Sites.Selected grant |
 | `docs/PREREQUISITES.md` | **Start here.** What must exist first: SharePoint columns and settings, D365 tables, lookups and forms, Entra apps, Azure, permissions |
 | `docs/SETUP.md` | Step-by-step setup (Entra → SharePoint → Function → solution import → D365 tables and forms → smoke test) |
 | `docs/ARCHITECTURE.md`, `docs/API_SPECS.md`, `docs/PCF_STANDARDS.md`, `docs/TROUBLESHOOTING.md` | Design, contracts, coding rules and known issues |
 | `AGENTS.md` (+ `CLAUDE.md`) | Instructions for AI coding agents (Claude Code, Cursor, Copilot, Windsurf) |
 
-## Categories
+## Categories and tables are configuration, not code
 
-| Hosted on | Dropdown | Folder |
+Categories (label, value, folder, colour, order), the tables that host the control, **each table's Contact lookup
+column**, the allowed categories per table and the upload limit per table all live in Dataverse. The API connection
+lives in environment variables. Admins change them in the app, with no rebuild and no SharePoint change. See
+**[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**. `dataverse/provision.mjs` creates the tables, environment
+variables and role under your admin account, then seeds them from `dataverse/seed.json`:
+
+| Table (seed) | Contact lookup | Categories → folders |
 |---|---|---|
-| Opportunity | Offer Letter | `Offer Letters/` |
-| | Commissions | `Commissions/` |
-| | Miscellaneous (`Misc`) | `Miscellaneous/` |
-| Any other entity (Advisor Onboarding) | Payslip | `Onboarding Documents/Payslips/` |
-| | Resignation Letter | `Onboarding Documents/Resignation Letters/` |
-| | FinCEN / U4 Verification (`FinCEN_U4`) | `Onboarding Documents/FinCEN_U4/` |
-| | Miscellaneous (`Misc`) | `Miscellaneous/` |
-
-The per-entity lists can be overridden with the control's **Category Config** property, e.g.
-`{"opportunity":["Offer Letter","Commissions","Misc"],"ce_advisoronboarding":["Payslip","FinCEN_U4","Misc"]}`.
-Category → folder mapping is enforced server-side in `backend/src/lib/categories.ts`, which is the source of truth.
-To add a category, add it there, to `ALL_CATEGORIES` in `pcf/CategorizedDocManager/categories.ts` and as a choice in
-SharePoint. Unknown names in Category Config are ignored, with a console warning.
+| `opportunity` | `parentcontactid` | Offer Letter → `Offer Letters/`, Commissions → `Commissions/`, Miscellaneous → `Miscellaneous/` |
+| `ce_advisoronboarding` | `ce_recruitid` | Payslip → `Onboarding Documents/Payslips/`, Resignation Letter → `Onboarding Documents/Resignation Letters/`, FinCEN / U4 Verification → `Onboarding Documents/FinCEN_U4/`, Miscellaneous |
 
 ## Security model
 

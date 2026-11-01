@@ -118,3 +118,39 @@ Don't "fix" them by undoing the documented workaround.
 22. **Contact renamed: is a new folder created?**
     - No. The folder is matched by its `_{guid}` suffix. A brand-new folder only appears if search hasn't indexed the
       old one yet, which is rare and only right after creation.
+
+## Configuration (Dataverse)
+
+23. **"The Document Manager isn't connected yet. Set these environment variables: …"**
+    - Cause: the listed `ce_DocManager*` environment variables have no value (and no override on the form).
+    - Fix: `node dataverse/provision.mjs set-env --org … --api-base-url … --tenant-id … --client-id … --api-scope …`,
+      or **Solutions → DocumentManager → Environment variables → New value**.
+
+24. **"Not set up for this table"**
+    - Cause: no **active** Document Manager Configuration row whose Table Logical Name equals the form's table.
+    - Fix: add or activate the row (docs/CONFIGURATION.md §3).
+
+25. **"Could not read Document Manager configuration / document categories"**
+    - Cause: the tables don't exist in this environment, or the user lacks the **Document Manager Reader** role.
+    - Fix: run `provision.mjs all` for this org; assign the role (directly or via a team).
+
+26. **Warning "This control is bound to "x", but the configuration … says the contact lookup is "y""**
+    - Cause: the form binds the control to a different lookup than the row's **Contact Lookup Column**.
+    - Fix: correct whichever is wrong. Later per-record security checks will use the configured column.
+
+27. **New category doesn't appear**
+    - Control: it's read once per page load, so reload the form. Check that the category is **active** and added to
+      the table's **Allowed Categories**.
+    - Backend: up to `CONFIG_CACHE_SECONDS` (default 5 min) before uploads with the new category are accepted.
+
+28. **Upload fails with `Dataverse error: …` or `Could not reach Dataverse`**
+    - Cause: the backend can't read configuration: `DATAVERSE_URL` is wrong or missing, the application user is
+      missing (`provision.mjs app-user`), or it lacks the **Document Manager Reader** role.
+
+29. **`provision.mjs`: "Could not get a token with Azure CLI"**
+    - Fix: `az login` with your D365 admin account (use `--tenant <tenant-id>` if you have several), or set
+      `DATAVERSE_TOKEN` to a bearer token for the org.
+
+30. **`provision.mjs role`: "Privilege prvReadce_DocumentCategory not found"**
+    - Cause: the tables weren't created or published yet. Run `schema` (it publishes), then `role` again.
+

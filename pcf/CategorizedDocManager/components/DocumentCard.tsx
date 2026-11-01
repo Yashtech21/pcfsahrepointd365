@@ -2,7 +2,7 @@ import * as React from "react";
 import { Badge, Button, Card, CardFooter, Text, Tooltip, makeStyles, tokens, mergeClasses } from "@fluentui/react-components";
 import { ArrowDownloadRegular, DeleteRegular, EyeRegular } from "./Icons";
 import { IDocumentItem } from "../types";
-import { categoryColor, categoryLabel } from "../categories";
+import { useCategoryCatalog } from "../categories";
 import { formatDate, formatSize } from "../utils";
 import { FileTypeIcon } from "./FileTypeIcon";
 
@@ -38,6 +38,7 @@ export interface IDocumentCardProps {
  */
 export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel, selected, isNew, onPreview, onDownload, onDelete }: IDocumentCardProps) {
     const s = useStyles();
+    const catalog = useCategoryCatalog();
     return (
         <Card className={mergeClasses(s.card, selected && s.selected)} size="small">
             <div className={s.head}>
@@ -47,8 +48,8 @@ export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel,
                         <Text className={s.name}>{doc.name}</Text>
                     </Tooltip>
                     <div>
-                        <Badge appearance="filled" size="medium" style={categoryColor(doc.category)}>
-                            {categoryLabel(doc.category) || "Uncategorized"}
+                        <Badge appearance="filled" size="medium" style={catalog.color(doc.category)}>
+                            {catalog.label(doc.category) || "Uncategorized"}
                         </Badge>
                         {isNew && <Badge className={s.newBadge} appearance="tint" color="success" size="medium">New</Badge>}
                     </div>

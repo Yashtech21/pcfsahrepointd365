@@ -4,7 +4,7 @@ import {
     Text, makeStyles, tokens,
 } from "@fluentui/react-components";
 import { IDocumentItem } from "../types";
-import { categoryLabel } from "../categories";
+import { useCategoryCatalog } from "../categories";
 import { formatDate } from "../utils";
 
 const useStyles = makeStyles({
@@ -34,6 +34,7 @@ export interface IDeleteDialogProps {
 export const DeleteDialog: React.FC<IDeleteDialogProps> = ({ doc, sourceLabel, deleting, onCancel, onConfirm }) => {
     const s = useStyles();
     const [acknowledged, setAcknowledged] = React.useState(false);
+    const { label: categoryLabel } = useCategoryCatalog();
     React.useEffect(() => setAcknowledged(false), [doc?.id]);
 
     return (

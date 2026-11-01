@@ -13,7 +13,7 @@ everywhere it's referenced.
 | **Entra ID**: Application Administrator (or Global Admin) | Creating the two app registrations and granting admin consent (`Sites.Selected`, API scope) |
 | **SharePoint Administrator** | Creating the site/library and granting the backend app write access to the one site (Sites.Selected grant) |
 | **Azure**: Contributor on a resource group | Creating the Function App, Storage account, Key Vault and Application Insights |
-| **Dynamics 365**: System Customizer or System Administrator | Importing the solution, creating the Advisor Onboarding table and lookup, editing and publishing forms |
+| **Dynamics 365**: System Administrator | Running `dataverse/provision.mjs` (tables, environment variables, role, application user), importing the solution, editing and publishing forms |
 
 ## 2. Tools (on the machine doing the setup)
 
@@ -24,6 +24,7 @@ everywhere it's referenced.
 | .NET SDK | 6+ | `dotnet build` of the solution project |
 | Azure Functions Core Tools | 4.x | Publishing the backend |
 | PowerShell + PnP.PowerShell | PowerShell 7.2+, PnP.PowerShell 2.x | `sharepoint/*.ps1` |
+| Azure CLI | current | `az login` so `dataverse/provision.mjs` runs as you (or set `DATAVERSE_TOKEN`) |
 
 ---
 
@@ -40,7 +41,7 @@ everywhere it's referenced.
 
 | Internal name | Display name (suggested) | Type | Indexed | Required | Values |
 |---|---|---|---|---|---|
-| `DocCategory` | Document Category | **Choice** (single) | **Yes** | **No** | Exactly: `Offer Letter`, `Commissions`, `Payslip`, `Resignation Letter`, `FinCEN_U4`, `Misc` |
+| `DocCategory` | Document Category | Single line of text | **Yes** | **No** | A category **Value** from Dataverse (`ce_documentcategory`), e.g. `FinCEN_U4` |
 | `SourceEntity` | Source Entity | Single line of text | No | **No** | Written by the backend, e.g. `opportunity`, `ce_advisoronboarding` |
 | `SourceRecordId` | Source Record ID | Single line of text | **Yes** | **No** | Lowercase GUID of the D365 record |
 | `ContactGuid` | Contact ID | Single line of text | **Yes** | **No** | Lowercase GUID of the D365 Contact |
@@ -50,8 +51,9 @@ everywhere it's referenced.
 > Create each column with the internal name first (`DocCategory`), then rename its display name. The setup script
 > does this correctly. `sharepoint/Test-ContactsLibrary.ps1` verifies it.
 
-> ⚠️ **Choice values are case- and spelling-sensitive.** They must match `backend/src/lib/categories.ts`.
-> Notably the value is `Misc` (label "Miscellaneous") and `FinCEN_U4` (label "FinCEN / U4 Verification").
+> ℹ️ **`DocCategory` is text, not Choice.** Categories are managed in Dataverse, so adding one never needs a
+> SharePoint change. If you created it as a Choice column earlier, change it to *Single line of text*: a Choice
+> column rejects categories added later.
 
 > ⚠️ **Indexes must exist before the library passes 5,000 items.** After that, SharePoint may refuse to add them,
 > and listing by `ContactGuid` will fail on large libraries.
@@ -98,12 +100,20 @@ columns, or the control won't show them.
 | **Contact** (`contact`) | Full Name (OOB) | The folder name comes from the lookup's display value (Full Name) |
 | **Opportunity** (`opportunity`) | **Contact** lookup `parentcontactid` (OOB) | Already exists. The control is bound to it |
 | **Advisor Onboarding** (custom, e.g. `ce_advisoronboarding`) | A **lookup to Contact**, e.g. `ce_recruitid` ("Recruit") | You must create the table and the lookup if they don't exist |
-| Any other table you want the control on | A **lookup to Contact** | Category list defaults to the onboarding set; override with *Category Config* |
+| Any other table you want the control on | A **lookup to Contact** (any logical name) | Plus a configuration row naming that lookup (below) |
 
-How categories are chosen: on `opportunity` the dropdown offers Offer Letter, Commissions and Miscellaneous. On **any
-other** table it offers Payslip, Resignation Letter, FinCEN / U4 Verification and Miscellaneous. To change this per
-table, set the control's *Category Config* property, e.g.
-`{"ce_advisoronboarding":["Payslip","Resignation Letter","FinCEN_U4","Misc"]}`.
+Each table can name its Contact lookup differently. The **Document Manager Configuration** row for the table stores
+it in **Contact Lookup Column**.
+
+### 4.2a Configuration (created by `dataverse/provision.mjs`; see [CONFIGURATION.md](CONFIGURATION.md))
+
+| Item | What | Notes |
+|---|---|---|
+| Table **Document Category** (`ce_documentcategory`) | Name, Value, Folder Path, colour, sort order | Replaces the hard-coded category list |
+| Table **Document Manager Configuration** (`ce_documentmanagerconfig`) | One active row per hosting table: Table Logical Name, **Contact Lookup Column**, optional Max Upload, Allowed Categories (N:N) | Without a row the control shows "Not set up for this table" and uploads are refused |
+| Environment variables | `ce_DocManagerApiBaseUrl`, `ce_DocManagerTenantId`, `ce_DocManagerClientId`, `ce_DocManagerApiScope` | Values set per environment (`provision.mjs set-env`) |
+| Security role **Document Manager Reader** | Org-level Read on both tables and on environment variables | Every control user, and the backend's application user |
+| Application user for `D365-SP-DocManager` | Created with `provision.mjs app-user` | Lets the backend read configuration |
 
 ### 4.3 Forms
 
@@ -119,6 +129,7 @@ table, set the control's *Category Config* property, e.g.
 | Read on the hosting table (Opportunity / Advisor Onboarding) | as per your model | To open the form |
 | Read on **Contact** | as per your model | To read the bound lookup |
 | Read on **User** (`systemuser`) | User (own record) | The control reads the user's sign-in name for single sign-on. Every standard role has this |
+| **Document Manager Reader** role | Organization | Read configuration tables and environment variables |
 | *(Optional)* Entra app role `DocManager.User` | — | Only if `REQUIRED_ROLE` is set on the Function App |
 
 > ⚠️ **Authorization is per user, not per record.** Anyone who can call the API can list documents for any contact
@@ -170,4 +181,5 @@ Keep these handy; SETUP.md asks for them.
 | SharePoint host / site path / library | `contoso.sharepoint.com` / `/sites/AdvisorManagement` / `Contacts` | Function `SP_*` settings, scripts |
 | Function base URL | `https://d365-sp-docmanager.azurewebsites.net/api` | Control *Document API Base URL* |
 | D365 org URL(s) | `https://contoso.crm.dynamics.com` | SPA redirect URIs, Function CORS |
-| Advisor Onboarding table + lookup | `ce_advisoronboarding` / `ce_recruitid` | Form setup, optional *Category Config* |
+| Advisor Onboarding table + lookup | `ce_advisoronboarding` / `ce_recruitid` | Form setup, `dataverse/seed.json` (configuration row) |
+| Dataverse org URL | `https://contoso.crm.dynamics.com` | `provision.mjs --org`, Function `DATAVERSE_URL` |

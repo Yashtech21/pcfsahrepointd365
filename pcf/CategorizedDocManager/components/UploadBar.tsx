@@ -39,6 +39,7 @@ const useStyles = makeStyles({
     contact: { display: "inline-flex", alignItems: "center", gap: "4px", marginBottom: "6px" },
     summary: { marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
     progress: { flexBasis: "100%" },
+    refused: { marginTop: tokens.spacingVerticalXS, color: tokens.colorPaletteRedForeground1, fontSize: tokens.fontSizeBase200 },
 });
 
 export interface IUploadBarProps {
@@ -49,6 +50,8 @@ export interface IUploadBarProps {
     disabledReason?: string;
     busy: boolean;
     progress?: IUploadProgress | null;
+    /** Per-table size limit; larger files are refused before upload (the server enforces it as well). */
+    maxFileBytes?: number;
     /** Resolves with the files that failed, which stay staged so the user can retry them. */
     onUpload: (files: File[]) => Promise<File[]>;
 }
@@ -65,10 +68,19 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
     const busy = p.busy || submitting;
     const disabled = !!p.disabledReason || busy;
 
+    const [refused, setRefused] = React.useState<string[]>([]);
+
     const addFiles = (list: FileList | null) => {
         if (!list || disabled) return;
         const files = Array.from(list);
-        setStaged(prev => [...prev, ...files.filter(f => !prev.some(x => x.name === f.name && x.size === f.size))]);
+        const tooBig = p.maxFileBytes ? files.filter(f => f.size > p.maxFileBytes!) : [];
+        const empty = files.filter(f => f.size === 0);
+        setRefused([
+            ...tooBig.map(f => `${f.name} is ${formatSize(f.size)}; the limit here is ${formatSize(p.maxFileBytes!)}`),
+            ...empty.map(f => `${f.name} is empty`),
+        ]);
+        const ok = files.filter(f => !tooBig.includes(f) && !empty.includes(f));
+        setStaged(prev => [...prev, ...ok.filter(f => !prev.some(x => x.name === f.name && x.size === f.size))]);
     };
 
     const upload = async () => {
@@ -114,6 +126,9 @@ export const UploadBar: React.FC<IUploadBarProps> = (p) => {
                             </Badge>
                         ))}
                     </div>
+                )}
+                {refused.length > 0 && (
+                    <Text className={s.refused} role="alert">Not added: {refused.join("; ")}.</Text>
                 )}
                 {staged.length > 0 && (
                     <Text className={s.summary} aria-live="polite">
