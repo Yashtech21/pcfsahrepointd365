@@ -2,6 +2,12 @@ import { IDocumentItem } from "../types";
 import { AuthService } from "./AuthService";
 import { fetchWithTimeout } from "./http";
 
+export interface IPreviewTarget {
+    url: string;
+    /** Form-encoded parameters when Graph returns a POST-based embed (postUrl). */
+    postParameters?: string;
+}
+
 export interface IUploadRequest {
     file: File;
     category: string;
@@ -65,8 +71,8 @@ export class DocumentApi {
         }, uploadTimeoutMs(req.file.size));
     }
 
-    public async previewUrl(itemId: string): Promise<string> {
-        return (await this.call<{ url: string }>(`/documents/${encodeURIComponent(itemId)}/preview`, { method: "POST" }, PREVIEW_TIMEOUT_MS)).url;
+    public previewTarget(itemId: string): Promise<IPreviewTarget> {
+        return this.call<IPreviewTarget>(`/documents/${encodeURIComponent(itemId)}/preview`, { method: "POST" }, PREVIEW_TIMEOUT_MS);
     }
 
     public async downloadUrl(itemId: string): Promise<string> {

@@ -6,13 +6,14 @@ let credential: ClientSecretCredential | null = null;
 
 const REQUEST_TIMEOUT_MS = Number(process.env.GRAPH_TIMEOUT_MS || "30000");
 const MAX_RETRY_WAIT_MS = 30000;
+const MAX_ATTEMPTS = 5;
 
 /**
  * Retry-After may be delta-seconds or an HTTP-date. Anything unparsable falls back to
  * exponential backoff so a throttled call never retries instantly.
  */
 export function retryDelayMs(header: string | null, attempt: number, now = Date.now()): number {
-    const fallback = 2 ** attempt * 1000;
+    const fallback = Math.min(2 ** attempt * 1000, MAX_RETRY_WAIT_MS);
     if (!header) return fallback;
     const seconds = Number(header);
     if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, MAX_RETRY_WAIT_MS);
@@ -25,38 +26,87 @@ export class GraphError extends Error {
     constructor(public status: number, message: string, public code?: string) { super(message); }
 }
 
+export type RetryDecision = "retry" | "fail";
+
+/**
+ * Whether a failed attempt may be repeated.
+ *
+ * - 429 and 503 mean the service refused the request without processing it: always safe to retry.
+ * - Timeouts, network errors, 500/502/504 are ambiguous (the request may have been applied), so they
+ *   are retried only for idempotent requests. A path-based upload with conflictBehavior=rename is NOT
+ *   idempotent: repeating it after a timeout could create "file 1.pdf" next to "file.pdf".
+ */
+export function retryDecision(outcome: number | "timeout" | "network", idempotent: boolean, attempt: number): RetryDecision {
+    if (attempt >= MAX_ATTEMPTS - 1) return "fail";
+    if (outcome === 429 || outcome === 503) return "retry";
+    if (outcome === "timeout" || outcome === "network" || outcome === 500 || outcome === 502 || outcome === 504) {
+        return idempotent ? "retry" : "fail";
+    }
+    return "fail";
+}
+
+export function isTimeout(e: unknown): boolean {
+    const name = (e as Error)?.name;
+    return name === "TimeoutError" || name === "AbortError";
+}
+
+export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
 async function token(): Promise<string> {
     credential ??= new ClientSecretCredential(config.tenantId, config.clientId, config.clientSecret);
     const t = await credential.getToken("https://graph.microsoft.com/.default");
     return t.token;
 }
 
+export interface GraphInit extends RequestInit {
+    json?: unknown;
+    /**
+     * May the request be repeated after an ambiguous failure? Defaults to true for GET/HEAD/DELETE/PATCH
+     * and false for POST/PUT; pass explicitly when a POST/PUT is known to be safe.
+     */
+    idempotent?: boolean;
+    timeoutMs?: number;
+}
+
 /**
- * Calls Microsoft Graph with an app-only token. Retries throttling (429) and transient 5xx
- * responses honouring Retry-After. `pathOrUrl` may be relative to /v1.0 or an absolute nextLink.
+ * Calls Microsoft Graph with an app-only token. Every attempt has a timeout; throttling and transient
+ * failures are retried per retryDecision(). `pathOrUrl` may be relative to /v1.0 or an absolute nextLink.
+ * Always throws GraphError on failure (504 for timeouts, 502 for network errors).
  */
-export async function graph<T = unknown>(pathOrUrl: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
+export async function graph<T = unknown>(pathOrUrl: string, init: GraphInit = {}): Promise<T> {
     const url = pathOrUrl.startsWith("https://") ? pathOrUrl : `${GRAPH}${pathOrUrl}`;
-    const headers: Record<string, string> = { Authorization: `Bearer ${await token()}`, ...(init.headers as Record<string, string>) };
-    let body = init.body;
-    if (init.json !== undefined) {
-        headers["Content-Type"] = "application/json";
-        body = JSON.stringify(init.json);
+    const method = (init.method ?? "GET").toUpperCase();
+    const idempotent = init.idempotent ?? ["GET", "HEAD", "DELETE", "PATCH"].includes(method);
+    const timeoutMs = init.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    const { json, idempotent: _i, timeoutMs: _t, ...fetchInit } = init;
+
+    let body = fetchInit.body;
+    const extraHeaders: Record<string, string> = { ...(fetchInit.headers as Record<string, string>) };
+    if (json !== undefined) {
+        extraHeaders["Content-Type"] = "application/json";
+        body = JSON.stringify(json);
     }
 
     for (let attempt = 0; ; attempt++) {
         let res: Response;
         try {
-            res = await fetch(url, { ...init, headers, body, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+            // Token fetched per attempt: a long retry sequence must not reuse an expired token.
+            const headers = { Authorization: `Bearer ${await token()}`, ...extraHeaders };
+            res = await fetch(url, { ...fetchInit, method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
         } catch (e) {
-            if ((e as Error).name === "TimeoutError") {
-                if (attempt < 2) continue;
-                throw new GraphError(504, `Microsoft Graph did not respond within ${REQUEST_TIMEOUT_MS / 1000}s`, "timeout");
+            const outcome = isTimeout(e) ? "timeout" : "network";
+            if (retryDecision(outcome, idempotent, attempt) === "retry") {
+                await sleep(retryDelayMs(null, attempt));
+                continue;
             }
-            throw e;
+            throw outcome === "timeout"
+                ? new GraphError(504, `Microsoft Graph did not respond within ${timeoutMs / 1000}s`, "timeout")
+                : new GraphError(502, `Could not reach Microsoft Graph: ${(e as Error).message}`, "network");
         }
-        if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < 4) {
-            await new Promise(r => setTimeout(r, retryDelayMs(res.headers.get("Retry-After"), attempt)));
+
+        if (!res.ok && retryDecision(res.status, idempotent, attempt) === "retry") {
+            await res.body?.cancel().catch(() => undefined);
+            await sleep(retryDelayMs(res.headers.get("Retry-After"), attempt));
             continue;
         }
         if (!res.ok) {

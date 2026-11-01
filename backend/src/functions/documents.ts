@@ -2,6 +2,7 @@ import { app, HttpRequest, HttpResponseInit, InvocationContext } from "@azure/fu
 import { AuthError, getCaller } from "../lib/auth";
 import { folderForCategory } from "../lib/categories";
 import { config } from "../lib/config";
+import { RejectedFileError } from "../lib/errors";
 import { GraphError } from "../lib/graph";
 import { isValidEntityName, normalizeGuid } from "../lib/naming";
 import * as sp from "../lib/sharepoint";
@@ -21,11 +22,13 @@ function handler(fn: Handler): Handler {
             return await fn(req, ctx);
         } catch (e) {
             if (e instanceof AuthError) return json(e.status, { error: e.message });
-            if (e instanceof BadRequest || e instanceof sp.NotAFileError) return json(400, { error: e.message });
+            if (e instanceof BadRequest || e instanceof sp.UnsupportedItemError) return json(400, { error: e.message });
+            if (e instanceof RejectedFileError) return json(415, { error: e.message });
             if (e instanceof sp.DeleteNotConfirmedError) return json(409, { error: e.message });
             if (e instanceof GraphError) {
                 ctx.warn(`Graph error ${e.status} ${e.code ?? ""}: ${e.message}`);
-                const status = e.status === 404 ? 404 : e.status === 403 ? 403 : e.status === 504 ? 504 : 502;
+                const status = e.status === 404 ? 404 : e.status === 403 ? 403 : e.status === 504 ? 504
+                    : e.status === 413 || e.status === 507 ? 507 : 502;
                 return json(status, { error: e.status === 404 ? "Document not found" : `SharePoint error: ${e.message}` });
             }
             ctx.error(e);
@@ -89,15 +92,12 @@ app.http("uploadDocument", {
     }),
 });
 
-// POST /api/documents/{itemId}/preview -> { url }
+// POST /api/documents/{itemId}/preview -> { url, postParameters? }
 app.http("previewDocument", {
     methods: ["POST"],
     authLevel: "anonymous",
     route: "documents/{itemId}/preview",
-    handler: handler(async (req) => {
-        const item = await sp.getItem(requireItemId(req));
-        return json(200, { url: await sp.previewUrl(item) });
-    }),
+    handler: handler(async (req) => json(200, await sp.previewTarget(requireItemId(req)))),
 });
 
 // GET /api/documents/{itemId}/download -> { url } (short-lived pre-authenticated URL)

@@ -31,7 +31,8 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
   runtime, so check the installed `.d.ts` before using a component.
 - Style with `makeStyles` and `tokens.*` for spacing, colour, typography and radius. Griffel does not allow CSS shorthands
   such as `borderColor`, `padding: "a b"` or `border` on some properties. Use `shorthands.*()` or longhands.
-  Fixed brand colours are allowed only in `categoryColor()` (category badges) and `FileTypeIcon` (file-type colours).
+  Fixed colours are allowed only in `categoryColor()` (category badges) and `FileTypeIcon` (file-type colours).
+  Everything else, including the preview background, uses tokens so dark themes work.
 - Icons: import from `./Icons`. To add one, copy the 20px Regular path from `@fluentui/react-icons` into
   `Icons.tsx` with the same `make()` helper. Do **not** add `@fluentui/react-icons` as a dependency.
 - Wrap the tree in `FluentProvider` with `context.fluentDesignLanguage?.tokenTheme ?? webLightTheme` (done in `index.ts`).
@@ -41,9 +42,10 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
 - First load (no documents yet): show `<SkeletonCards>` in the same grid class as the real cards, so there's no
   layout shift. Later refreshes keep the current cards and only set `aria-busy`.
 - Preview loading: `<SkeletonPreview>`, not a spinner.
-- All HTTP goes through `DocumentApi.call()` → `fetchWithTimeout()` (`services/http.ts`). Timeouts: 8 s default,
-  15 s preview, `60 s + bytes/256 ms` upload. Token acquisition uses `withTimeout(…, 10 s)`. The popup fallback
-  is not timed.
+- All HTTP goes through `DocumentApi.call()` → `fetchWithTimeout()` (`services/http.ts`). Timeouts are the
+  constants `DEFAULT_TIMEOUT_MS`, `PREVIEW_TIMEOUT_MS` and `uploadTimeoutMs()` in `DocumentApi.ts`, plus
+  `SILENT_TIMEOUT_MS` in `AuthService.ts` for silent token calls. The popup fallback is not timed. Change the
+  constants, not the call sites.
 - A failed list shows an error `MessageBar` with a **Retry** action. Action errors (upload, download, delete) show
   an error `MessageBar`. Never leave a spinner or skeleton with no way out.
 
@@ -51,13 +53,21 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
 
 - **Upload:** the button locks on the first click (`submittingRef`, then `submitting` state) and stays disabled
   until the upload finishes. Files go up one at a time. Files that fail **stay staged** for retry, and successful ones
-  are cleared. The list reloads only if at least one file succeeded.
+  are cleared. The list reloads if any file succeeded or timed out.
+- **Upload timeouts can't create duplicates:** a client timeout doesn't mean the server failed. After the reload,
+  `landedDespiteTimeout()` treats a timed-out file as uploaded when a matching document (same size, this record,
+  recent, same base name allowing for SharePoint's ` 1` rename) exists, and removes it from the staged list.
+- **Server rejections are final:** `415` (blocked or disguised file) and `400` messages are shown per file. Don't
+  add client-side copies of the blocked-type list; the server (`fileRules.ts`) is the single source of truth.
 - **Delete:** `DeleteDialog` (`modalType="alert"`) shows file, category, source and date. Delete stays disabled
   until the acknowledgement checkbox is ticked, and the dialog can't be dismissed while deleting. On success the
   card is removed from local state and the list is **not** refetched. The update is **confirmed, not
   optimistic**: the server can refuse with 400 or 409, so the card stays until the server says 204.
-- **Preview:** the iframe is created only after the user clicks **Preview** and the embed URL has arrived. It is
-  sandboxed (`allow-scripts allow-same-origin allow-popups allow-forms`) and removed when the pane closes.
+- **Preview:** the iframe is created only after the user clicks **Preview** and the preview target has arrived. It is
+  sandboxed (`allow-scripts allow-same-origin allow-popups allow-forms`), uses `referrerPolicy="no-referrer"`, and
+  is removed when the pane closes. A `{ url }` target becomes the iframe `src`. A `{ url, postParameters }` target is
+  sent by a hidden React-rendered `<form method="post" target={frameName}>` submitted from an effect. Non-https
+  URLs are refused on the client as well as the server.
 - **Download:** ask the API for the short-lived `downloadUrl`, then click a temporary `<a>`. Never link the
   SharePoint `webUrl` as the download.
 
@@ -71,7 +81,7 @@ dialog gating, and a double-clicked Upload sending one request.
 
 ## 7. Bundle hygiene
 
-- `npm run build:prod` → `out/controls/CategorizedDocManager/bundle.js` should stay around **330 KB** (about 80 KB
-  gzipped). MSAL is about 284 KB of that. A big jump usually means React, Fluent or Griffel got bundled. Check with
+- `npm run build:prod` → `out/controls/CategorizedDocManager/bundle.js` is roughly 330 KB (about 80 KB gzipped),
+  and MSAL accounts for most of it. Treat a jump of more than about 50 KB as a regression to explain. A big jump usually means React, Fluent or Griffel got bundled. Check with
   `grep -c griffel bundle.js` (it should be 0).
 - No date or format libraries. Use `formatDate` / `formatSize` in `utils.ts`.

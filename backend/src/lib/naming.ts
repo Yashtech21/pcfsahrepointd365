@@ -5,15 +5,31 @@ export function normalizeGuid(value: string | null | undefined): string | null {
     return GUID_RE.test(g) ? g : null;
 }
 
-/** Removes characters SharePoint does not allow in file/folder names and trims trailing dots/spaces. */
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9]|desktop\.ini|\.lock|thumbs\.db)(\.|$)/i;
+
+/**
+ * Makes a name safe for SharePoint/OneDrive: removes illegal and control characters, the "~$" prefix,
+ * "_vti_" (both rejected by SharePoint), leading/trailing dots and spaces, and prefixes reserved device
+ * names. The extension is preserved when the name has to be shortened.
+ */
 export function sanitizeName(name: string): string {
-    const cleaned = name
+    let cleaned = name
+        .normalize("NFC")
         .replace(/["*:<>?/\\|#%]/g, "_")
-        .replace(/[\u0000-\u001f]/g, "")
+        .replace(/[\u0000-\u001f\u007f]/g, "")
+        .replace(/_vti_/gi, "_vti-")
         .replace(/\s+/g, " ")
         .trim()
+        .replace(/^~\$/, "")
+        .replace(/^[. ]+/, "")
         .replace(/[. ]+$/, "");
-    return cleaned.slice(0, 200) || "_";
+    if (RESERVED.test(cleaned)) cleaned = `_${cleaned}`;
+    if (cleaned.length > 200) {
+        const dot = cleaned.lastIndexOf(".");
+        const ext = dot > 0 && cleaned.length - dot <= 16 ? cleaned.slice(dot) : "";
+        cleaned = cleaned.slice(0, 200 - ext.length).replace(/[. ]+$/, "") + ext;
+    }
+    return cleaned || "_";
 }
 
 /** Contact root folder per the spec: {Contact_FullName}_{Contact_GUID} */

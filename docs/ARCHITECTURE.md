@@ -49,6 +49,8 @@ not used). Everything for an advisor lives under the parent Contact:
 - Folders are created lazily. The contact root is created explicitly, and category sub-folders are created
   implicitly by Graph path-based uploads.
 - Conflicting file names are auto-renamed by Graph (`conflictBehavior=rename`), never overwritten.
+- Files are validated before anything is written (`fileRules.ts`: blocked types, executable content,
+  content/extension match). After upload, the stored size must equal the received size, otherwise the file is deleted.
 
 ### Category → folder (server is the source of truth: `backend/src/lib/categories.ts`)
 

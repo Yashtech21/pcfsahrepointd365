@@ -38,21 +38,33 @@ The client type is `IDocumentItem` in `pcf/.../types.ts` (it doesn't use `contac
 | Method & route | Request | Success | Errors |
 |---|---|---|---|
 | `GET /documents?contactId={guid}` | — | `200 DocumentDto[]` (files only, all pages) | `400` bad GUID |
-| `POST /documents/upload?fileName=&category=&contactId=&contactName=&sourceEntity=&sourceRecordId=` | **Body: raw file bytes**, `Content-Type` = file MIME | `201 DocumentDto` | `400` validation, `413` > `MAX_UPLOAD_MB` (default 100) |
-| `POST /documents/{itemId}/preview` | no body | `200 { "url": "<embed getUrl>" }` | `400` not a file / no preview, `404` |
+| `POST /documents/upload?fileName=&category=&contactId=&contactName=&sourceEntity=&sourceRecordId=` | **Body: raw file bytes**, `Content-Type` = file MIME | `201 DocumentDto` | `400` validation, `413` > `MAX_UPLOAD_MB`, `415` file rejected (see "File safety"), `502` stored size mismatch (upload discarded) |
+| `POST /documents/{itemId}/preview` | no body | `200 { "url": "…" }` **or** `200 { "url": "…", "postParameters": "a=1&b=2" }` (POST the form-encoded parameters to `url` inside the iframe) | `400` not a file / no preview, `404` |
 | `GET /documents/{itemId}/download` | — | `200 { "url": "<pre-authenticated downloadUrl>" }` | `400` not a file, `404` |
 | `DELETE /documents/{itemId}` | header `X-Confirm-Delete: <encodeURIComponent(fileName)>` | `204` | `400` missing header / folder, `404`, `409` name doesn't match the item |
 
-Shared error mapping: Graph `404` → `404`; Graph `403` → `403`; Graph or our own timeout → `504`; other Graph
-errors → `502`; anything unexpected → `500`.
+Shared error mapping (`handler()` in `documents.ts`): Graph `404` → `404`; Graph `403` → `403`; any timeout
+(Graph call or upload chunk) → `504`; Graph `413`/`507` (quota) → `507`; other Graph or network errors → `502`;
+anything unexpected → `500`. Every URL returned to the browser (preview, download) has passed `assertTrustedUrl`
+(https and a Microsoft/SharePoint host).
 
 ### Validation rules (server)
 
 - `contactId`, `sourceRecordId`: GUID (braces and case are normalised).
 - `sourceEntity`: `^[a-z][a-z0-9_]{0,63}$`.
 - `category`: must be a key of `CATEGORY_FOLDERS`.
-- `fileName`: required. It is sanitised (`"*:<>?/\|#%` → `_`, control characters and trailing dots/spaces removed,
-  max 200 chars).
+- `fileName`: required. It is sanitised by `sanitizeName` (`naming.ts`): illegal characters, control characters,
+  the `~$` prefix, `_vti_`, leading or trailing dots/spaces and reserved device names are handled, and the
+  extension is kept when shortening.
+
+### File safety (`backend/src/lib/fileRules.ts`, checked before anything is written)
+
+- Blocked extensions: `DEFAULT_BLOCKED` (executables, scripts, disk images, macro-enabled Office). The **final**
+  extension is checked, so `invoice.pdf.exe` is blocked. Override with the `BLOCKED_EXTENSIONS` app setting.
+- Executable content (PE/ELF/Mach-O headers, `#!` scripts) is rejected under **any** name.
+- Content must match the extension for the types in `SIGNATURES` (pdf, Office, OpenDocument, images, rtf, zip).
+  An `.exe` renamed to `.pdf` is rejected.
+- After upload, the stored size must equal the received size. Otherwise the file is deleted and `502` returned.
 - `itemId`: `^[A-Za-z0-9!_\-]+$`.
 
 ### Why raw bytes and not base64 JSON
@@ -63,27 +75,50 @@ JSON parsing of large payloads. **Do not reintroduce base64 uploads.**
 
 ---
 
-## Part B: Microsoft Graph calls (backend only, `backend/src/lib/sharepoint.ts`)
+## Part B: Microsoft Graph calls (backend only)
 
-All calls go through `graph()` (app-only token, 30 s timeout via `GRAPH_TIMEOUT_MS`, retries on 429/503/504
-honouring `Retry-After` given in seconds or as an HTTP-date, capped at 30 s, with an exponential fallback).
+Source of truth: `backend/src/lib/sharepoint.ts` (requests), `graph.ts` (transport) and `uploadSession.ts` (large
+files). This section describes **behaviour and contracts**. For exact query strings, timeouts and sizes, read the
+named constants in code rather than copying them here, so the doc can't drift.
 
-| Purpose | Request |
-|---|---|
-| Resolve site | `GET /sites/{hostname}:{sitePath}` |
-| Resolve library | `GET /sites/{siteId}/lists?$select=id,name,displayName` → match `SP_LIBRARY_NAME` |
-| Resolve drive | `GET /sites/{siteId}/lists/{listId}/drive?$select=id` |
-| Contact folder exists? | `GET /drives/{driveId}/root:/{encoded folder}?$select=id` |
-| Find renamed folder | `GET /drives/{driveId}/root/search(q='{contactGuid}')?$select=id,name,folder,parentReference&$top=50` |
-| Create contact folder | `POST /drives/{driveId}/root/children` `{ "name": "...", "folder": {}, "@microsoft.graph.conflictBehavior": "fail" }` (a 409 means another request created it) |
-| Upload ≤ 4 MB | `PUT /drives/{driveId}/root:/{path}:/content?@microsoft.graph.conflictBehavior=rename` (body = bytes) |
-| Upload > 4 MB | `POST /drives/{driveId}/root:/{path}:/createUploadSession` `{ "item": { "@microsoft.graph.conflictBehavior": "rename" } }`, then `PUT {uploadUrl}` chunks of **5 MiB = 16 × 320 KiB** with `Content-Range: bytes {start}-{end}/{total}`. **No** `Authorization` header on `uploadUrl`. 120 s per chunk. On failure the session is cancelled with `DELETE {uploadUrl}` |
-| Tag metadata | `PATCH /drives/{driveId}/items/{itemId}/listItem/fields` `{ "DocCategory", "SourceEntity", "SourceRecordId", "ContactGuid" }`. On failure → `DELETE` the item, then rethrow |
-| List by contact | `GET /sites/{siteId}/lists/{listId}/items?$expand=fields($select=DocCategory,SourceEntity,SourceRecordId,ContactGuid),driveItem($select=id,name,webUrl,size,createdDateTime,file)&$filter=fields/ContactGuid eq '{guid}'&$top=200` + header `Prefer: HonorNonIndexedQueriesWarningMayFailRandomly`. Follow `@odata.nextLink`. Keep only items with `driveItem.file` |
-| Get item | `GET /drives/{driveId}/items/{id}?$expand=listItem($expand=fields($select=…))` |
-| Preview | `POST /drives/{driveId}/items/{id}/preview`. Body: **Office files** (`doc[x] xls[x] ppt[x] odt ods odp rtf`) `{ "viewer": "office", "chromeless": true }`; **everything else** (PDF, images) `{}`. Use the response's `getUrl` as the iframe `src`. If there is no `getUrl`, return 400 |
-| Download URL | `GET /drives/{driveId}/items/{id}` → `@microsoft.graph.downloadUrl` (short-lived, pre-authenticated) |
-| Delete | `GET /drives/{driveId}/items/{id}?$select=id,name,file,folder` (must be a file and the name must match), then `DELETE /drives/{driveId}/items/{id}` |
+### Transport rules (`graph()` in `graph.ts`)
+
+- App-only token, fetched per attempt. Every attempt has a timeout (`REQUEST_TIMEOUT_MS`, app setting
+  `GRAPH_TIMEOUT_MS`).
+- Retries follow `retryDecision()`. `429`/`503` are always retried after `Retry-After` (seconds or HTTP-date,
+  via `retryDelayMs`). Timeouts, network errors and `500/502/504` are retried **only for idempotent requests**.
+- Idempotent by default: GET, HEAD, DELETE, PATCH. POST/PUT are not, unless the caller passes `idempotent: true`
+  (done for preview, folder creation with `conflictBehavior=fail`, and `createUploadSession`).
+  **The small-file upload PUT is deliberately not idempotent.** With `conflictBehavior=rename`, repeating it after a
+  timeout could create a duplicate.
+- Failures always surface as `GraphError`.
+
+### Operations
+
+| Purpose | Graph call(s) | Notes |
+|---|---|---|
+| Resolve site, library, drive | `GET /sites/{host}:{path}`, `GET …/lists`, `GET …/lists/{id}/drive` | `getTarget()`, cached per worker |
+| Contact folder | `GET root:/{name}` → `GET root/search(q='{guid}')` → `POST root/children` (`conflictBehavior: fail`) | `ensureContactFolder()`. Matches on the `_{guid}` suffix. Cache bounded by `FOLDER_CACHE_MAX` |
+| Upload ≤ `SMALL_UPLOAD_LIMIT` | `PUT root:/{path}:/content?@microsoft.graph.conflictBehavior=rename` | Intermediate folders are created by Graph |
+| Upload > `SMALL_UPLOAD_LIMIT` | `POST root:/{path}:/createUploadSession`, then `uploadToSession()` | See "Large-file uploads" |
+| Tag metadata | `PATCH /items/{id}/listItem/fields` (the four columns) | On failure the file is deleted, then the error is rethrown |
+| List by contact | `GET /lists/{id}/items?$expand=fields(…),driveItem(…)&$filter=fields/ContactGuid eq '{guid}'` | Follows `@odata.nextLink`. Files only. Columns in `FIELDS` |
+| Preview | `GET /items/{id}?$select=id,name,file`, then `POST /items/{id}/preview` | Office types (`isOfficeFile`) send `{ viewer: "office", chromeless: true }`, others `{}`. Returns `getUrl`, or `postUrl` + `postParameters` |
+| Download URL | `GET /items/{id}` → `@microsoft.graph.downloadUrl` | Short-lived and pre-authenticated. Files only |
+| Delete | `GET /items/{id}?$select=id,name,file,folder`, then `DELETE /items/{id}` | Must be a file, and the name must equal `X-Confirm-Delete` |
+
+### Large-file uploads (`uploadToSession()` in `uploadSession.ts`)
+
+- Chunks of `CHUNK_SIZE` (must stay a multiple of 320 KiB), each with `Content-Range` and its own timeout
+  (`CHUNK_TIMEOUT_MS`). The pre-authenticated `uploadUrl` **never** receives the bearer token.
+- `202` → continue at `nextExpectedRanges`. `200/201` → the response body is the created item.
+- `429/503` → wait for `Retry-After` and resend the same range.
+- Timeout, network error, `5xx` or `416` → `GET uploadUrl` to read `nextExpectedRanges` and **resume from there**,
+  so a chunk that landed is never sent twice.
+- `404` (session expired) or any other `4xx` → stop.
+- After `MAX_FAILURES` consecutive failures, or on any stop: `DELETE uploadUrl` (with `CONTROL_TIMEOUT_MS`), then
+  throw `GraphError` (`504` for timeouts).
+- Covered by `backend/test/uploadSession.test.ts`.
 
 ### Permissions
 

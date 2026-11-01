@@ -50,24 +50,29 @@ The **browser never calls Microsoft Graph or SharePoint directly**. All Graph ac
    from `updateView`, and never use `notifyOutputChanged` to force a re-render (the control has no outputs).
 3. **Memoize.** Filtering and sorting go in `React.useMemo`. Handlers passed to cards go in `React.useCallback`.
    `DocumentCard` and `DocumentManager` are `React.memo`. Keep it that way.
-4. **Every network call has a timeout.** In the browser, use `fetchWithTimeout` / `withTimeout` from
-   `pcf/.../services/http.ts`. Do not call `fetch` directly. Defaults: 8 s for API calls, 15 s for preview,
-   60 s plus file size for uploads, 10 s for silent token calls. In the backend, all Graph calls go through
-   `graph()` in `backend/src/lib/graph.ts` (30 s, retries 429/503/504).
-   Timeouts must surface as a message with a Retry button, never as an endless spinner.
+4. **Every network call has a timeout, and retries must not duplicate files.** Browser: `fetchWithTimeout` /
+   `withTimeout` (`pcf/.../services/http.ts`), never bare `fetch`. Backend: Graph calls go through `graph()`
+   (`graph.ts`) and upload-session traffic through `uploadToSession()` (`uploadSession.ts`), which also times out the
+   cancel request. Only idempotent requests are retried after ambiguous failures (`retryDecision`). Timeouts surface
+   as a message with Retry, never an endless spinner. Timeout values are named constants; see PCF_STANDARDS §4 and
+   API_SPECS Part B.
 5. **Entity context comes from `context.mode.contextInfo`** (`entityTypeName`, `entityId`). Category lists come
    from `categoriesFor(entityName, categoryConfig)` in `categories.ts`. `context.page` is not used.
 6. **No DOM access outside the control.** React state and Fluent components only. Don't touch the D365 page DOM
-   or `Xrm`. (The temporary `<a>` element used to start a download is the only exception.)
+   or `Xrm`. (Exceptions: the temporary `<a>` used to start a download, and submitting the control's own
+   React-rendered preview `<form>`.)
 7. **Destructive actions need confirmation on both sides.** Delete goes through `DeleteDialog` (checkbox
    acknowledgement). `DocumentApi.remove(id, name)` sends `X-Confirm-Delete`, and the backend refuses folders and
    name mismatches. Never add a delete or bulk-delete path that skips either check.
-8. **Server is the source of truth** for category → folder mapping (`backend/src/lib/categories.ts`), input
+8. **Server is the source of truth** for category → folder mapping (`backend/src/lib/categories.ts`), file safety
+   (`fileRules.ts`: blocked types, executable content, content/extension match), file-name sanitising, input
    validation and authorization. Client checks are for UX only.
 9. **Never trust `X-MS-CLIENT-PRINCIPAL`.** Callers are authenticated by verifying the bearer JWT in
    `backend/src/lib/auth.ts`.
 10. **Secrets never go in the PCF control or the repo.** Control properties hold only public IDs and URLs.
     `GRAPH_CLIENT_SECRET` lives in Function App settings / Key Vault. `local.settings.json` is gitignored.
+11. **Files are untrusted input.** Never store a file before `assertFileAllowed()` passes. Never hand the browser a
+    URL that hasn't passed `assertTrustedUrl()`. Never weaken the post-upload size check or the metadata rollback.
 
 ## Commands
 
@@ -87,7 +92,8 @@ type check.
 
 ## Definition of done for a change
 
-- `npm run build` and `npm run build:prod` succeed in `pcf/`. `npm test` passes in `backend/`.
+- `npm run build` and `npm run build:prod` succeed in `pcf/`. `npm test` passes in `backend/`. Anything touching
+  uploads, retries or file safety keeps `uploadSession.test.ts` and `safety.test.ts` green and extends them.
 - New backend logic that can be tested without Graph (parsing, naming, validation, auth rejection) has a test in
   `backend/test/`.
 - If you changed a contract, update `docs/API_SPECS.md`. If you changed a folder, column or flow, update

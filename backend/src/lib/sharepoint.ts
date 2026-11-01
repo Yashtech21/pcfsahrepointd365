@@ -1,6 +1,11 @@
 import { config } from "./config";
+import { DeleteNotConfirmedError, UnsupportedItemError } from "./errors";
+import { assertFileAllowed } from "./fileRules";
 import { graph, GraphError } from "./graph";
 import { contactFolderName, encodePath, isOfficeFile, sanitizeName } from "./naming";
+import { uploadToSession } from "./uploadSession";
+
+export { DeleteNotConfirmedError, UnsupportedItemError };
 
 /** Shape returned to the PCF control (mirrors IDocumentItem on the client). */
 export interface DocumentDto {
@@ -25,8 +30,7 @@ interface DriveItem {
 }
 
 const SMALL_UPLOAD_LIMIT = 4 * 1024 * 1024;
-const CHUNK_SIZE = 16 * 320 * 1024; // 5 MiB, must be a multiple of 320 KiB
-const CHUNK_TIMEOUT_MS = 120000;
+const FOLDER_CACHE_MAX = 5000;
 const FIELDS = "DocCategory,SourceEntity,SourceRecordId,ContactGuid";
 
 let targetPromise: Promise<Target> | null = null;
@@ -77,7 +81,12 @@ export async function ensureContactFolder(contactId: string, contactName: string
     const { driveId } = await getTarget();
     const desired = contactFolderName(contactName, contactId);
 
-    const remember = (name: string) => { contactFolderCache.set(contactId, name); return name; };
+    const remember = (name: string) => {
+        // Bounded: a long-lived worker serving many contacts must not grow without limit.
+        if (contactFolderCache.size >= FOLDER_CACHE_MAX) contactFolderCache.delete(contactFolderCache.keys().next().value!);
+        contactFolderCache.set(contactId, name);
+        return name;
+    };
 
     try {
         await graph(`/drives/${driveId}/root:/${encodePath(desired)}?$select=id`);
@@ -95,6 +104,7 @@ export async function ensureContactFolder(contactId: string, contactName: string
     try {
         await graph(`/drives/${driveId}/root/children`, {
             method: "POST",
+            idempotent: true, // conflictBehavior=fail: a repeat yields 409, handled below
             json: { name: desired, folder: {}, "@microsoft.graph.conflictBehavior": "fail" },
         });
     } catch (e) {
@@ -115,20 +125,39 @@ export interface UploadInput {
 }
 
 export async function uploadDocument(input: UploadInput): Promise<DocumentDto> {
+    const fileName = sanitizeName(input.fileName);
+    // Validate before touching SharePoint: blocked types, executables, content/extension mismatch.
+    assertFileAllowed(fileName, input.content);
+
     const { driveId } = await getTarget();
     const root = await ensureContactFolder(input.contactId, input.contactName);
-    const path = encodePath(`${root}/${input.categoryFolder}/${sanitizeName(input.fileName)}`);
+    const path = encodePath(`${root}/${input.categoryFolder}/${fileName}`);
+    const bytes = new Uint8Array(input.content.buffer, input.content.byteOffset, input.content.length);
 
     let item: DriveItem;
-    if (input.content.length <= SMALL_UPLOAD_LIMIT) {
-        // Graph creates any missing intermediate folders for path-based uploads.
+    if (bytes.length <= SMALL_UPLOAD_LIMIT) {
+        // Graph creates any missing intermediate folders for path-based uploads. Not idempotent
+        // (conflictBehavior=rename), so graph() won't repeat it after a timeout.
         item = await graph<DriveItem>(`/drives/${driveId}/root:/${path}:/content?@microsoft.graph.conflictBehavior=rename`, {
             method: "PUT",
             headers: { "Content-Type": "application/octet-stream" },
-            body: new Uint8Array(input.content),
+            body: bytes as unknown as BodyInit, // type-only: Node accepts any Uint8Array
         });
     } else {
-        item = await uploadLarge(driveId, path, input.content);
+        const session = await graph<{ uploadUrl: string }>(`/drives/${driveId}/root:/${path}:/createUploadSession`, {
+            method: "POST",
+            idempotent: true, // an unused duplicate session simply expires
+            json: { item: { "@microsoft.graph.conflictBehavior": "rename" } },
+        });
+        item = await uploadToSession<DriveItem>(session.uploadUrl, bytes);
+    }
+
+    const rollback = () => graph(`/drives/${driveId}/items/${item.id}`, { method: "DELETE" }).catch(() => undefined);
+
+    // Integrity: SharePoint must hold exactly what we received.
+    if (typeof item.size === "number" && item.size !== bytes.length) {
+        await rollback();
+        throw new GraphError(502, `Stored file size (${item.size}) does not match the upload (${bytes.length}); the upload was discarded`);
     }
 
     const fields = {
@@ -142,34 +171,10 @@ export async function uploadDocument(input: UploadInput): Promise<DocumentDto> {
     } catch (e) {
         // Without ContactGuid the file would be invisible to the control and a retry would create a
         // renamed duplicate, so roll the upload back before reporting the failure.
-        await graph(`/drives/${driveId}/items/${item.id}`, { method: "DELETE" }).catch(() => undefined);
+        await rollback();
         throw e;
     }
     return toDto(item, fields);
-}
-
-async function uploadLarge(driveId: string, path: string, content: Buffer): Promise<DriveItem> {
-    const session = await graph<{ uploadUrl: string }>(`/drives/${driveId}/root:/${path}:/createUploadSession`, {
-        method: "POST",
-        json: { item: { "@microsoft.graph.conflictBehavior": "rename" } },
-    });
-    const total = content.length;
-    for (let start = 0; start < total; start += CHUNK_SIZE) {
-        const end = Math.min(start + CHUNK_SIZE, total);
-        // uploadUrl is pre-authenticated: it must NOT receive the bearer token.
-        const res = await fetch(session.uploadUrl, {
-            method: "PUT",
-            signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS),
-            headers: { "Content-Length": String(end - start), "Content-Range": `bytes ${start}-${end - 1}/${total}` },
-            body: new Uint8Array(content.subarray(start, end)),
-        });
-        if (!res.ok) {
-            await fetch(session.uploadUrl, { method: "DELETE" }).catch(() => undefined);
-            throw new GraphError(res.status, `Chunk upload failed at byte ${start}: ${await res.text()}`);
-        }
-        if (end === total) return (await res.json()) as DriveItem;
-    }
-    throw new Error("Upload session ended unexpectedly");
 }
 
 /** All documents tagged with the contact GUID (indexed column), across every source entity. */
@@ -192,32 +197,46 @@ export async function listByContact(contactId: string): Promise<DocumentDto[]> {
     return results;
 }
 
-export async function getItem(itemId: string): Promise<DriveItem> {
-    const { driveId } = await getTarget();
-    return graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}?$expand=listItem($expand=fields($select=${FIELDS}))`);
+export interface PreviewTarget {
+    url: string;
+    /** Present when Graph returns a POST-based embed: form-encoded parameters to POST to `url`. */
+    postParameters?: string;
 }
 
-/** Short-lived embeddable preview URL (Graph driveItem: preview). */
-export async function previewUrl(item: DriveItem): Promise<string> {
-    if (!item.file) throw new NotAFileError("Only files can be previewed");
+/** Only https URLs on Microsoft/SharePoint hosts are handed to the browser for embedding/downloading. */
+export function assertTrustedUrl(raw: string): string {
+    let u: URL;
+    try { u = new URL(raw); } catch { throw new GraphError(502, "Graph returned an invalid URL"); }
+    const host = u.hostname.toLowerCase();
+    const trusted = [".sharepoint.com", ".sharepoint.us", ".sharepoint.de", ".sharepoint.cn", ".microsoft.com",
+        ".office.com", ".office.net", ".officeapps.live.com", ".svc.ms", ".live.com", ".microsoftonline.com"];
+    if (u.protocol !== "https:" || !trusted.some(t => host === t.slice(1) || host.endsWith(t))) {
+        throw new GraphError(502, `Graph returned an untrusted URL host (${host})`);
+    }
+    return u.toString();
+}
+
+/** Short-lived embeddable preview (Graph driveItem: preview). */
+export async function previewTarget(itemId: string): Promise<PreviewTarget> {
     const { driveId } = await getTarget();
+    const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}?$select=id,name,file`);
+    if (!item.file) throw new UnsupportedItemError("Only files can be previewed");
     const body = isOfficeFile(item.name) ? { viewer: "office", chromeless: true } : {};
-    const r = await graph<{ getUrl?: string }>(`/drives/${driveId}/items/${item.id}/preview`, { method: "POST", json: body });
-    if (!r.getUrl) throw new NotAFileError("Preview is not available for this file type");
-    return r.getUrl;
+    const r = await graph<{ getUrl?: string; postUrl?: string; postParameters?: string }>(
+        `/drives/${driveId}/items/${item.id}/preview`, { method: "POST", idempotent: true, json: body });
+    if (r.getUrl) return { url: assertTrustedUrl(r.getUrl) };
+    if (r.postUrl) return { url: assertTrustedUrl(r.postUrl), postParameters: r.postParameters ?? "" };
+    throw new UnsupportedItemError("Preview is not available for this file type");
 }
 
 export async function downloadUrl(itemId: string): Promise<string> {
     const { driveId } = await getTarget();
     const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}`);
     const url = item["@microsoft.graph.downloadUrl"];
-    if (!item.file || !url) throw new NotAFileError("Item is not a downloadable file");
-    return url;
+    if (!item.file || !url) throw new UnsupportedItemError("Item is not a downloadable file");
+    return assertTrustedUrl(url);
 }
 
-/** The item exists but the operation doesn't apply to it (folder, or no preview/download). Mapped to 400. */
-export class NotAFileError extends Error {}
-export class DeleteNotConfirmedError extends Error {}
 
 /**
  * Deletes a single file (it goes to the SharePoint recycle bin). Folders are never deleted through
@@ -227,7 +246,7 @@ export class DeleteNotConfirmedError extends Error {}
 export async function deleteFile(itemId: string, confirmedName: string): Promise<void> {
     const { driveId } = await getTarget();
     const item = await graph<DriveItem>(`/drives/${driveId}/items/${encodeURIComponent(itemId)}?$select=id,name,file,folder`);
-    if (!item.file || item.folder) throw new NotAFileError("Only files can be deleted");
+    if (!item.file || item.folder) throw new UnsupportedItemError("Only files can be deleted");
     if (!confirmedName || confirmedName !== item.name) {
         throw new DeleteNotConfirmedError("Delete was not confirmed for this file");
     }

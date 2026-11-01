@@ -5,7 +5,8 @@ import {
 import { ArrowSortRegular, ArrowSyncRegular, FilterRegular, SearchRegular } from "./Icons";
 import { IDocumentItem, IHostContext } from "../types";
 import { ICategory, categoryLabel } from "../categories";
-import { DocumentApi } from "../services/DocumentApi";
+import { DocumentApi, IPreviewTarget } from "../services/DocumentApi";
+import { TimeoutError } from "../services/http";
 import { prettifyEntityName } from "../utils";
 import { UploadBar } from "./UploadBar";
 import { DocumentCard } from "./DocumentCard";
@@ -31,7 +32,21 @@ const useStyles = makeStyles({
 
 type Scope = "record" | "all";
 type SortKey = "name" | "category" | "date";
-interface IPreviewState { doc: IDocumentItem; url: string | null; error: string | null }
+interface IPreviewState { doc: IDocumentItem; target: IPreviewTarget | null; error: string | null }
+
+/**
+ * After a client-side timeout the server may still have stored the file. Treat a timed-out file as
+ * uploaded if a matching document (same size, this record, recent, same base name allowing for
+ * SharePoint's " 1" rename suffix) now exists, so a retry doesn't create a duplicate.
+ */
+function landedDespiteTimeout(file: File, docs: IDocumentItem[], recordId: string, startedAt: number): boolean {
+    // "Offer Letter.pdf" vs stored "Offer Letter 1.pdf" / sanitised "Offer_Letter.pdf" -> "offerletter"
+    const key = (n: string) => n.replace(/\.[^.]+$/, "").replace(/ \d+$/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    return docs.some(d => d.size === file.size
+        && d.sourceRecordId === recordId
+        && new Date(d.uploadDate).getTime() >= startedAt - 60000
+        && key(d.name) === key(file.name));
+}
 
 export interface IDocumentManagerProps {
     host: IHostContext;
@@ -92,18 +107,20 @@ export const DocumentManager = React.memo(function DocumentManager(
     // Only the latest request for the current contact may update state (guards against out-of-order
     // responses when the lookup changes quickly). Identical concurrent requests share one call in DocumentApi.
     const requestSeq = React.useRef(0);
-    const loadDocs = React.useCallback(async () => {
+    const loadDocs = React.useCallback(async (): Promise<IDocumentItem[] | null> => {
         const seq = ++requestSeq.current;
-        if (!api || !host.contactId) { setDocuments([]); setLoading(false); return; }
+        if (!api || !host.contactId) { setDocuments([]); setLoading(false); return null; }
         setLoading(true); setLoadError(null);
         try {
             const docs = await api.listByContact(host.contactId);
             if (seq === requestSeq.current) setDocuments(docs);
+            return docs;
         } catch (e) {
             if (seq === requestSeq.current) setLoadError(`Could not load documents: ${(e as Error).message}`);
         } finally {
             if (seq === requestSeq.current) setLoading(false);
         }
+        return null;
     }, [api, host.contactId]);
 
     React.useEffect(() => { void loadDocs(); }, [loadDocs]);
@@ -140,8 +157,10 @@ export const DocumentManager = React.memo(function DocumentManager(
     const handleUpload = React.useCallback(async (files: File[]): Promise<File[]> => {
         if (!api) return files;
         setUploading(true); setError(null); setInfo(null);
+        const startedAt = Date.now();
         const failed: File[] = [];
-        const messages: string[] = [];
+        const timedOut = new Set<File>();
+        const messages = new Map<File, string>();
         for (const file of files) {
             try {
                 await api.upload({
@@ -151,22 +170,37 @@ export const DocumentManager = React.memo(function DocumentManager(
                 });
             } catch (e) {
                 failed.push(file);
-                messages.push(`${file.name} (${(e as Error).message})`);
+                if (e instanceof TimeoutError) timedOut.add(file);
+                messages.set(file, `${file.name} (${(e as Error).message})`);
+            }
+        }
+
+        let stillFailed = failed;
+        if (failed.length < files.length || timedOut.size) {
+            const docs = await loadDocs();
+            // A timed-out upload may have completed on the server; don't leave it staged for a duplicate retry.
+            if (docs && timedOut.size) {
+                stillFailed = failed.filter(f => !(timedOut.has(f) && landedDespiteTimeout(f, docs, host.recordId, startedAt)));
             }
         }
         setUploading(false);
-        if (failed.length) setError(`Upload failed for ${failed.length} file(s), still selected so you can retry: ${messages.join("; ")}`);
-        else setInfo(`${files.length} file(s) uploaded as "${categoryLabel(category)}".`);
-        if (failed.length < files.length) await loadDocs();
-        return failed;
+        const succeeded = files.length - stillFailed.length;
+        if (stillFailed.length) {
+            setError(`Upload failed for ${stillFailed.length} file(s), still selected so you can retry: `
+                + stillFailed.map(f => messages.get(f)).join("; "));
+            if (succeeded) setInfo(`${succeeded} file(s) uploaded as "${categoryLabel(category)}".`);
+        } else {
+            setInfo(`${files.length} file(s) uploaded as "${categoryLabel(category)}".`);
+        }
+        return stillFailed;
     }, [api, category, host, loadDocs]);
 
     const openPreview = React.useCallback(async (doc: IDocumentItem) => {
         if (!api) return;
-        setPreview({ doc, url: null, error: null });
+        setPreview({ doc, target: null, error: null });
         try {
-            const url = await api.previewUrl(doc.id);
-            setPreview(p => (p && p.doc.id === doc.id ? { ...p, url } : p));
+            const target = await api.previewTarget(doc.id);
+            setPreview(p => (p && p.doc.id === doc.id ? { ...p, target } : p));
         } catch (e) {
             setPreview(p => (p && p.doc.id === doc.id ? { ...p, error: `Preview unavailable: ${(e as Error).message}` } : p));
         }
@@ -284,7 +318,7 @@ export const DocumentManager = React.memo(function DocumentManager(
                 </div>
 
                 {preview && (
-                    <PreviewPane doc={preview.doc} url={preview.url} error={preview.error} onClose={closePreview} />
+                    <PreviewPane doc={preview.doc} target={preview.target} error={preview.error} onClose={closePreview} />
                 )}
             </div>
 

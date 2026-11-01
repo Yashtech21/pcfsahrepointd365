@@ -61,6 +61,7 @@ Function App (Node 20, Functions v4) **App settings**:
 | `GRAPH_TIMEOUT_MS` | *(optional, default 30000)* per-request Graph timeout |
 | `REQUIRED_ROLE` | *(optional)* `DocManager.User` |
 | `MAX_UPLOAD_MB` | *(optional, default 100)* |
+| `BLOCKED_EXTENSIONS` | *(optional)* comma-separated list that **replaces** the default blocked types in `fileRules.ts` |
 
 **Authentication.** The Function verifies every caller's Entra ID bearer token itself (signature, issuer,
 audience, expiry, tenant, optional role), so it stays secure even if the platform setting below is missing.

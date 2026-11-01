@@ -76,19 +76,36 @@ Don't "fix" them by undoing the documented workaround.
     - Cause: missing `Sites.Selected` grant, or admin consent not given.
     - Fix: re-run `sharepoint/Setup-ContactsLibrary.ps1` and grant admin consent for `Sites.Selected`.
 
+17a. **"Graph returned an untrusted URL host"**
+    - Cause: a preview or download URL wasn't https on a Microsoft/SharePoint host (`assertTrustedUrl`).
+    - Fix: if Microsoft introduces a new legitimate host (sovereign clouds, new CDN), add its suffix to the list in
+      `assertTrustedUrl`, with a test in `safety.test.ts`.
+
 17. **Preview pane shows an error, or the iframe is blank or blocked**
     - Cause: the file type has no Graph preview, or the iframe `src` isn't the exact `getUrl`.
     - Fix: always use the `getUrl` returned by `/preview` unmodified. Office files use `viewer: "office", chromeless: true`;
       PDFs and images must send `{}` (the Office viewer can't render them). Users can still use "Open in SharePoint".
 
 18. **Large upload fails partway**
-    - Cause: chunk size isn't a multiple of 320 KiB, a chunk took longer than 120 s, or the bearer token was sent to `uploadUrl`.
-    - Fix: keep `CHUNK_SIZE = 16 * 320 * 1024` (5 MiB) and send no `Authorization` header on `uploadUrl`.
+    - `uploadToSession` already retries throttling and resumes after timeouts from `nextExpectedRanges`. A final
+      failure means `MAX_FAILURES` was hit, the session expired (404), or SharePoint returned a non-retryable 4xx.
+    - Check: `CHUNK_SIZE` is still a multiple of 320 KiB, no `Authorization` header goes to `uploadUrl`, and the
+      Function's own timeout (`functionTimeout` in `host.json`, 5 min default on Consumption) covers the largest
+      allowed file.
 
 19. **"did not respond within N seconds" banner**
     - Cause: network stall, a slow token refresh, or Graph throttling that went past the timeout.
     - Fix: use **Retry**. If it happens often on big contacts, raise `GRAPH_TIMEOUT_MS` (backend) or
       `DEFAULT_TIMEOUT_MS` (`DocumentApi.ts`). Don't remove the timeouts.
+
+20a. **`415` "Files of type .x are not allowed" / "content does not match its extension" / "Executable files…"**
+    - Cause: `fileRules.ts` rejected the file (blocked type, disguised file, or executable content).
+    - Fix: this is intended. If a legitimate type is blocked (e.g. macro-enabled `.xlsm` your business needs), set
+      `BLOCKED_EXTENSIONS` on the Function App to the full list you want. Setting it replaces the default list.
+
+20b. **Upload timed out in the browser, but the file shows up anyway**
+    - Expected: the server finished after the client gave up. The control detects this
+      (`landedDespiteTimeout`) and doesn't leave the file staged, so it isn't uploaded twice.
 
 20. **A document exists in SharePoint but not in the control**
     - Cause: it has no `ContactGuid` (uploaded outside the control) or isn't a file.

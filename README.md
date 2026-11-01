@@ -13,7 +13,11 @@ SharePoint document grid with:
   (`X-Confirm-Delete`) and refuses to delete folders.
 - **Resilient loading**: card skeletons while loading, timeouts on every call with a Retry banner, and duplicate
   calls are skipped while Dynamics repeatedly calls `updateView`. Upload is locked on the first click.
-- Drag-and-drop multi-file upload. Files over 4 MB use Graph upload sessions in 5 MB chunks.
+- Drag-and-drop multi-file upload. Large files use resumable Graph upload sessions that retry throttling and resume
+  after timeouts without re-sending data.
+- **File safety:** executables, scripts and macro-enabled files are blocked, files whose content doesn't match
+  their extension are rejected, names are sanitised, the stored size is verified, and only https
+  Microsoft/SharePoint URLs reach the browser.
 
 ![All contact documents with preview](docs/screenshot-all-contact-documents.png)
 
