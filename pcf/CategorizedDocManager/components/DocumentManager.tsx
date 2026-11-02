@@ -1,7 +1,7 @@
 import * as React from "react";
 import {
     Button, CounterBadge, Input, MessageBar, MessageBarActions, MessageBarBody, ProgressBar, Tab, TabList, Text,
-    ToggleButton, makeStyles, tokens,
+    ToggleButton, makeStyles, mergeClasses, tokens,
 } from "@fluentui/react-components";
 import { ArrowSortRegular, ArrowSyncRegular, FilterRegular, SearchRegular } from "./Icons";
 import { IDocumentItem, IHostContext } from "../types";
@@ -15,6 +15,10 @@ import { PreviewPane } from "./PreviewPane";
 import { SkeletonCards } from "./SkeletonCards";
 import { DeleteDialog } from "./DeleteDialog";
 import { CopyLinkDialog } from "./CopyLinkDialog";
+import { useElementWidth } from "../hooks";
+
+/** Below this control width, tabs use short labels and the preview pane stacks under the grid. */
+const COMPACT_WIDTH = 640;
 
 const useStyles = makeStyles({
     root: {
@@ -31,6 +35,8 @@ const useStyles = makeStyles({
     empty: { padding: tokens.spacingVerticalXXL, textAlign: "center", color: tokens.colorNeutralForeground3 },
     footer: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: "right" },
     tabLabel: { display: "inline-flex", alignItems: "center", gap: tokens.spacingHorizontalXS },
+    tabList: { flexWrap: "wrap" },
+    workspaceStacked: { flexDirection: "column" },
     chips: { display: "flex", gap: tokens.spacingHorizontalXS, flexWrap: "wrap", alignItems: "center" },
     chip: { minWidth: "auto" },
     chipCount: { marginLeft: tokens.spacingHorizontalXS },
@@ -86,6 +92,8 @@ export const DocumentManager = React.memo(function DocumentManager(
 ) {
     const s = useStyles();
     const catalog = useCategoryCatalog();
+    const [rootRef, width] = useElementWidth<HTMLDivElement>();
+    const compact = width !== undefined && width < COMPACT_WIDTH;
     const categoryLabel = catalog.label;
     const [scope, setScope] = React.useState<Scope>(host.recordId ? "record" : "all");
     const [documents, setDocuments] = React.useState<IDocumentItem[]>([]);
@@ -333,7 +341,7 @@ export const DocumentManager = React.memo(function DocumentManager(
     const firstLoad = loading && documents.length === 0;
 
     return (
-        <div className={s.root}>
+        <div className={s.root} ref={rootRef}>
             <Text className={s.title}>Documents</Text>
 
             <UploadBar
@@ -356,25 +364,26 @@ export const DocumentManager = React.memo(function DocumentManager(
             {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
             {info && <MessageBar intent="success"><MessageBarBody>{info}</MessageBarBody></MessageBar>}
 
-            <TabList selectedValue={scope} onTabSelect={(_, d) => setScope(d.value as Scope)}>
-                <Tab value="record" disabled={!host.recordId}
+            <TabList className={s.tabList} selectedValue={scope} onTabSelect={(_, d) => setScope(d.value as Scope)}>
+                <Tab value="record" disabled={!host.recordId} title={`This Record's Documents (${entityLabel})`}
                      aria-label={`This Record's Documents (${entityLabel})${countsReady ? `, ${recordDocs.length} documents` : ""}`}>
                     <span className={s.tabLabel}>
-                        This Record's Documents ({entityLabel})
+                        {compact ? "This record" : `This Record's Documents (${entityLabel})`}
                         {countsReady && host.recordId && <CounterBadge count={recordDocs.length} showZero size="small"
                             appearance={scope === "record" ? "filled" : "ghost"} color={scope === "record" ? "brand" : "informative"} />}
                     </span>
                 </Tab>
-                <Tab value="all" aria-label={`All Contact Documents (${host.contactName || "no contact"})${countsReady ? `, ${documents.length} documents` : ""}`}>
+                <Tab value="all" title={`All Contact Documents (${host.contactName || "no contact"})`}
+                     aria-label={`All Contact Documents (${host.contactName || "no contact"})${countsReady ? `, ${documents.length} documents` : ""}`}>
                     <span className={s.tabLabel}>
-                        All Contact Documents ({host.contactName || "no contact"})
+                        {compact ? "All documents" : `All Contact Documents (${host.contactName || "no contact"})`}
                         {countsReady && <CounterBadge count={documents.length} showZero size="small"
                             appearance={scope === "all" ? "filled" : "ghost"} color={scope === "all" ? "brand" : "informative"} />}
                     </span>
                 </Tab>
             </TabList>
 
-            <div className={s.workspace}>
+            <div className={mergeClasses(s.workspace, compact && s.workspaceStacked)}>
                 <div className={s.gridCol}>
                     <div className={s.gridHeader}>
                         <Text className={s.gridHeaderTitle}>
@@ -449,7 +458,7 @@ export const DocumentManager = React.memo(function DocumentManager(
 
                 {preview && (
                     <PreviewPane doc={preview.doc} target={preview.target} error={preview.error} onClose={closePreview}
-                                 onCopyFailed={onCopyFailed} />
+                                 onCopyFailed={onCopyFailed} stacked={compact} />
                 )}
             </div>
 

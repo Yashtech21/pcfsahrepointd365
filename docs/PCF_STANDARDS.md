@@ -41,6 +41,14 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
   `Icons.tsx` with the same `make()` helper. Do **not** add `@fluentui/react-icons` as a dependency.
 - Wrap the tree in `FluentProvider` with `context.fluentDesignLanguage?.tokenTheme ?? webLightTheme` (done in `index.ts`).
 
+### Narrow layouts
+
+`DocumentManager` measures its **own** root element with `useElementWidth` (`hooks.ts`, ResizeObserver, one update
+per frame). Below `COMPACT_WIDTH` (640px) the tabs use short labels ("This record" / "All documents"), keeping their
+counts, with the full name in `title` and `aria-label`. The tab row and card footers may wrap, and the preview pane
+stacks full-width under the grid (`PreviewPane stacked`). Base responsive decisions on the control's width, not the
+window's: the same form section can be narrow on a wide screen.
+
 ## 4. Loading, errors and timeouts
 
 - First load (no documents yet): show `<SkeletonCards>` in the same grid class as the real cards, so there's no

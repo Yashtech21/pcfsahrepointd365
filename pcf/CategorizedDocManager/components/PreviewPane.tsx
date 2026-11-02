@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Button, Text, makeStyles, tokens } from "@fluentui/react-components";
+import { Button, Text, makeStyles, mergeClasses, tokens } from "@fluentui/react-components";
 import { SkeletonPreview } from "./SkeletonCards";
 import { DismissRegular, OpenRegular } from "./Icons";
 import { IDocumentItem } from "../types";
@@ -11,7 +11,8 @@ const isHttps = (u: string) => { try { return new URL(u).protocol === "https:"; 
 
 const useStyles = makeStyles({
     pane: {
-        display: "flex", flexDirection: "column", minWidth: "320px", width: "38%",
+        // Side pane on wide layouts; `stacked` makes it full width under the grid on narrow ones.
+        display: "flex", flexDirection: "column", minWidth: "min(320px, 100%)", width: "38%",
         border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
         backgroundColor: tokens.colorNeutralBackground2,
     },
@@ -25,6 +26,7 @@ const useStyles = makeStyles({
     hidden: { display: "none" },
     center: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: tokens.spacingHorizontalL },
     error: { color: tokens.colorPaletteRedForeground1 },
+    stacked: { width: "100%" },
 });
 
 export interface IPreviewPaneProps {
@@ -33,9 +35,11 @@ export interface IPreviewPaneProps {
     error: string | null;
     onClose: () => void;
     onCopyFailed: (doc: IDocumentItem) => void;
+    /** Narrow layout: full width under the grid instead of a side pane. */
+    stacked?: boolean;
 }
 
-export const PreviewPane: React.FC<IPreviewPaneProps> = ({ doc, target, error, onClose, onCopyFailed }) => {
+export const PreviewPane: React.FC<IPreviewPaneProps> = ({ doc, target, error, onClose, onCopyFailed, stacked }) => {
     const s = useStyles();
     // Unique per pane so a POST-based preview can target this iframe by name.
     const frameName = React.useMemo(() => `cdm-preview-${Math.random().toString(36).slice(2)}`, []);
@@ -52,7 +56,7 @@ export const PreviewPane: React.FC<IPreviewPaneProps> = ({ doc, target, error, o
         if (isPost && !invalid) formRef.current?.submit();
     }, [isPost, invalid, target]);
     return (
-        <aside className={s.pane} aria-label="Document preview">
+        <aside className={mergeClasses(s.pane, stacked && s.stacked)} aria-label="Document preview">
             <div className={s.header}>
                 <Text className={s.title}>Preview: {doc.name}</Text>
                 <CopyLinkButton doc={doc} onCopyFailed={onCopyFailed} />
