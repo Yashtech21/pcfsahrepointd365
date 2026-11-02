@@ -74,7 +74,9 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
   URLs are refused on the client as well as the server.
 - **Copy link:** `CopyLinkButton` (on each card and in the preview header) copies `doc.webUrl` with the async
   Clipboard API (`copyText` in `utils.ts`) and shows a checkmark for 2 s. If the browser refuses, `CopyLinkDialog`
-  shows the link pre-selected for Ctrl+C. Don't fall back to `document.execCommand` or hidden textareas (rule 6).
+  shows the link pre-selected for Ctrl+C (⌘C on Mac, detected with `isMacPlatform`). The button uses
+  `disabledFocusable` when there's no link, so its tooltip still explains why, and success is announced through a
+  hidden `role="status"` region. Don't fall back to `document.execCommand` or hidden textareas (rule 6).
   The link is the plain SharePoint URL: it grants nothing, so recipients need their own SharePoint access. Never
   create sharing links (Graph `createLink`) from the control, because that changes permissions.
 - **Download:** ask the API for the short-lived `downloadUrl`, then click a temporary `<a>`. Never link the
@@ -100,6 +102,10 @@ timeout contract (rejects with `TimeoutError`). Counts include all files in the 
 Chip counts follow the active tab.
 
 ## 6. Testing the UI
+
+Pure helpers (`utils.ts`: `copyText`, `isMacPlatform`, formatters) have unit tests in `pcf/test/`, run with
+`npm test` (compiled with `tsconfig.test.json`, browser globals stubbed). Keep UI logic that can be pure in
+`utils.ts` so it stays testable.
 
 `npm start watch` runs the PCF harness, but the harness has no backend or MSAL, so you'll only see the
 "not configured" message or auth errors. To check the UI, render `DocumentManager` with a fake `DocumentApi`

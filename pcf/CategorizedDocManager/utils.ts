@@ -35,6 +35,12 @@ export function formatDate(iso: string): string {
  * Copies text with the async Clipboard API. Returns false when the browser refuses (no permission,
  * not a secure context, or no user gesture); callers then show the text for manual copying.
  */
+/** True on macOS/iOS (for showing ⌘ instead of Ctrl). Uses UA Client Hints when available. */
+export function isMacPlatform(nav: { userAgentData?: { platform?: string }; userAgent?: string } = navigator as never): boolean {
+    const platform = nav.userAgentData?.platform || nav.userAgent || "";
+    return /mac|iphone|ipad|ipod/i.test(platform);
+}
+
 export async function copyText(text: string): Promise<boolean> {
     try {
         if (window.isSecureContext && navigator.clipboard?.writeText) {

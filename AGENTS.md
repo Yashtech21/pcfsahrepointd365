@@ -94,6 +94,7 @@ The **browser never calls Microsoft Graph or SharePoint directly**. All Graph ac
 | Build control (prod, check size) | `npm run build:prod` (`pcf/`) |
 | Test harness | `npm start watch` (`pcf/`) — harness has no real API; see PCF_STANDARDS §6 |
 | Backend build + unit tests | `npm test` (`backend/`) |
+| Control unit tests (helpers in `utils.ts`) | `npm test` (`pcf/`) |
 | Dataverse provisioning script tests | `node --test dataverse/provision.test.mjs` (repo root) |
 | Provision / configure Dataverse | `node dataverse/provision.mjs all --org <url> [--dry-run\|--offline]`, then `set-env`, `app-user` |
 | Run backend locally | `cp local.settings.sample.json local.settings.json && npm start` (`backend/`, needs Functions Core Tools) |
@@ -105,7 +106,7 @@ type check.
 
 ## Definition of done for a change
 
-- `npm run build` and `npm run build:prod` succeed in `pcf/`. `npm test` passes in `backend/`. Anything touching
+- `npm run build`, `npm run build:prod` and `npm test` succeed in `pcf/`. `npm test` passes in `backend/`. Anything touching
   uploads, retries or file safety keeps `uploadSession.test.ts` and `safety.test.ts` green and extends them.
 - New backend logic that can be tested without Graph (parsing, naming, validation, auth rejection) has a test in
   `backend/test/`.

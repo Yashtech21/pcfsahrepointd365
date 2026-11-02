@@ -1,8 +1,12 @@
 import * as React from "react";
-import { Button, Tooltip } from "@fluentui/react-components";
+import { Button, Tooltip, makeStyles } from "@fluentui/react-components";
 import { CheckmarkRegular, LinkRegular } from "./Icons";
 import { IDocumentItem } from "../types";
 import { copyText } from "../utils";
+
+const useStyles = makeStyles({
+    srOnly: { position: "absolute", width: "1px", height: "1px", overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap" },
+});
 
 export interface ICopyLinkButtonProps {
     doc: IDocumentItem;
@@ -16,13 +20,18 @@ export interface ICopyLinkButtonProps {
  * Shows a checkmark for 2 seconds after copying. People who open the link need SharePoint access to the file.
  */
 export const CopyLinkButton: React.FC<ICopyLinkButtonProps> = ({ doc, onCopyFailed, className }) => {
+    const s = useStyles();
     const [copied, setCopied] = React.useState(false);
     const timer = React.useRef<number>();
-    React.useEffect(() => () => window.clearTimeout(timer.current), []);
+    // The card can unmount while the clipboard promise is pending (list refresh, filter): don't touch state then.
+    const mounted = React.useRef(true);
+    React.useEffect(() => () => { mounted.current = false; window.clearTimeout(timer.current); }, []);
 
     const copy = async () => {
         if (!doc.webUrl) return;
-        if (await copyText(doc.webUrl)) {
+        const ok = await copyText(doc.webUrl);
+        if (!mounted.current) return;
+        if (ok) {
             setCopied(true);
             window.clearTimeout(timer.current);
             timer.current = window.setTimeout(() => setCopied(false), 2000);
@@ -33,15 +42,20 @@ export const CopyLinkButton: React.FC<ICopyLinkButtonProps> = ({ doc, onCopyFail
 
     const label = !doc.webUrl ? "Link not available" : copied ? "Link copied" : "Copy link";
     return (
-        <Tooltip content={label} relationship="label">
-            <Button
-                className={className}
-                size="small"
-                appearance="subtle"
-                icon={copied ? <CheckmarkRegular /> : <LinkRegular />}
-                disabled={!doc.webUrl}
-                onClick={() => void copy()}
-            />
-        </Tooltip>
+        <>
+            <Tooltip content={label} relationship="label">
+                <Button
+                    className={className}
+                    size="small"
+                    appearance="subtle"
+                    icon={copied ? <CheckmarkRegular /> : <LinkRegular />}
+                    // disabledFocusable keeps hover/focus, so the "Link not available" tooltip can still explain why.
+                    disabledFocusable={!doc.webUrl}
+                    onClick={() => void copy()}
+                />
+            </Tooltip>
+            {/* Screen readers don't announce aria-label changes: say it explicitly. */}
+            <span className={s.srOnly} role="status" aria-live="polite">{copied ? `Link to ${doc.name} copied` : ""}</span>
+        </>
     );
 };

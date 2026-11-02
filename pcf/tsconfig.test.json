@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "es2019",
+    "module": "commonjs",
+    "lib": ["es2019", "dom"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "out-test",
+    "rootDir": "."
+  },
+  "include": ["test/**/*.ts", "CategorizedDocManager/utils.ts"]
+}

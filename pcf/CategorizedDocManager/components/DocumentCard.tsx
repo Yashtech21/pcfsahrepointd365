@@ -17,7 +17,8 @@ const useStyles = makeStyles({
     body: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
     name: { fontWeight: tokens.fontWeightSemibold, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
     meta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-    footer: { gap: 0 },
+    // Wraps on narrow cards (grid minimum 250px) instead of clipping the last action.
+    footer: { columnGap: 0, rowGap: tokens.spacingVerticalXXS, flexWrap: "wrap" },
     newBadge: { marginLeft: tokens.spacingHorizontalXS },
     action: { minWidth: "auto", paddingLeft: "4px", paddingRight: "6px" },
 });

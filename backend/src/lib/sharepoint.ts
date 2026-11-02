@@ -56,9 +56,22 @@ function str(v: unknown): string {
 }
 
 /** File links go to the browser ("Open in SharePoint", "Copy link"): only trusted https hosts, else none. */
+const reportedUntrustedHosts = new Set<string>();
+
 function safeWebUrl(raw: string | undefined): string {
     if (!raw) return "";
-    try { return assertTrustedUrl(raw); } catch { return ""; }
+    try {
+        return assertTrustedUrl(raw);
+    } catch {
+        // Log each rejected host once per worker so a new legitimate Microsoft host is easy to spot.
+        let host = "(unparsable)";
+        try { host = new URL(raw).hostname; } catch { /* keep placeholder */ }
+        if (!reportedUntrustedHosts.has(host) && reportedUntrustedHosts.size < 100) {
+            reportedUntrustedHosts.add(host);
+            console.warn(`Dropped file link with untrusted host "${host}". If it's a legitimate Microsoft host, add it to assertTrustedUrl.`);
+        }
+        return "";
+    }
 }
 
 export function toDto(item: DriveItem, fields: Record<string, unknown> = item.listItem?.fields ?? {}): DocumentDto {

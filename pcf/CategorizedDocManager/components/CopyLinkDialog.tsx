@@ -3,7 +3,7 @@ import {
     Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle, Input, Text, makeStyles, tokens,
 } from "@fluentui/react-components";
 import { IDocumentItem } from "../types";
-import { copyText } from "../utils";
+import { copyText, isMacPlatform } from "../utils";
 
 const useStyles = makeStyles({
     body: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalS },
@@ -15,7 +15,7 @@ export const CopyLinkDialog: React.FC<{ doc: IDocumentItem | null; onClose: () =
     const s = useStyles();
     const [status, setStatus] = React.useState("");
     React.useEffect(() => setStatus(""), [doc?.id]);
-    const isMac = /mac/i.test(navigator.platform);
+    const isMac = React.useMemo(() => isMacPlatform(), []);
 
     return (
         <Dialog open={!!doc} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>

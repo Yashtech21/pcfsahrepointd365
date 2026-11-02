@@ -12,7 +12,8 @@
     "start": "pcf-scripts start",
     "start:watch": "pcf-scripts start watch",
     "refreshTypes": "pcf-scripts refreshTypes",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test out-test/test/*.test.js"
   },
   "dependencies": {
     "@azure/msal-browser": "^3.28.0"
