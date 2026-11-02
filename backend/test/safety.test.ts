@@ -58,3 +58,13 @@ test("only https Microsoft/SharePoint URLs are passed to the browser", () => {
     assert.throws(() => assertTrustedUrl("https://contoso.sharepoint.com.evil.io/x"));
     assert.throws(() => assertTrustedUrl("javascript:alert(1)"));
 });
+
+import { toDto } from "../src/lib/sharepoint";
+
+test("file links in list results pass the trusted-URL check (used by Open in SharePoint / Copy link)", () => {
+    const base = { id: "1", name: "a.pdf", size: 1, createdDateTime: "2026-01-01T00:00:00Z" };
+    assert.equal(toDto({ ...base, webUrl: "https://contoso.sharepoint.com/sites/x/a.pdf" }).webUrl,
+        "https://contoso.sharepoint.com/sites/x/a.pdf");
+    assert.equal(toDto({ ...base, webUrl: "javascript:alert(1)" }).webUrl, "");
+    assert.equal(toDto({ ...base, webUrl: "https://evil.example.com/a.pdf" }).webUrl, "");
+});

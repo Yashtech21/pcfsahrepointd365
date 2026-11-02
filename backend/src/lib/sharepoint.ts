@@ -55,6 +55,12 @@ function str(v: unknown): string {
     return typeof v === "string" ? v : "";
 }
 
+/** File links go to the browser ("Open in SharePoint", "Copy link"): only trusted https hosts, else none. */
+function safeWebUrl(raw: string | undefined): string {
+    if (!raw) return "";
+    try { return assertTrustedUrl(raw); } catch { return ""; }
+}
+
 export function toDto(item: DriveItem, fields: Record<string, unknown> = item.listItem?.fields ?? {}): DocumentDto {
     const ext = item.name.includes(".") ? item.name.split(".").pop()!.toLowerCase() : "";
     return {
@@ -65,7 +71,7 @@ export function toDto(item: DriveItem, fields: Record<string, unknown> = item.li
         sourceRecordId: str(fields.SourceRecordId).toLowerCase(),
         contactId: str(fields.ContactGuid).toLowerCase(),
         uploadDate: item.createdDateTime,
-        webUrl: item.webUrl,
+        webUrl: safeWebUrl(item.webUrl),
         size: item.size ?? 0,
         fileType: ext,
     };

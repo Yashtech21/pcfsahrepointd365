@@ -79,7 +79,7 @@ columns, or the control won't show them.
 | Who | Access needed |
 |---|---|
 | Backend app `D365-SP-DocManager` | **Write** on this site via **Sites.Selected** (not `Sites.ReadWrite.All`) |
-| End users | **None for upload, list, download or delete** (all done by the backend). **Read** on the site is needed only for the "Open in SharePoint" button. Confirm during testing whether your tenant's preview links also need it. |
+| End users | **None for upload, list, download or delete** (all done by the backend). **Read** on the site (or the file) is needed only for "Open in SharePoint" and for opening a **copied link**. The link grants no access by itself. Confirm during testing whether your tenant's preview links also need it. |
 
 ---
 

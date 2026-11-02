@@ -72,6 +72,11 @@ Applies to everything under `pcf/`. Current code already follows these rules. Ke
   is removed when the pane closes. A `{ url }` target becomes the iframe `src`. A `{ url, postParameters }` target is
   sent by a hidden React-rendered `<form method="post" target={frameName}>` submitted from an effect. Non-https
   URLs are refused on the client as well as the server.
+- **Copy link:** `CopyLinkButton` (on each card and in the preview header) copies `doc.webUrl` with the async
+  Clipboard API (`copyText` in `utils.ts`) and shows a checkmark for 2 s. If the browser refuses, `CopyLinkDialog`
+  shows the link pre-selected for Ctrl+C. Don't fall back to `document.execCommand` or hidden textareas (rule 6).
+  The link is the plain SharePoint URL: it grants nothing, so recipients need their own SharePoint access. Never
+  create sharing links (Graph `createLink`) from the control, because that changes permissions.
 - **Download:** ask the API for the short-lived `downloadUrl`, then click a temporary `<a>`. Never link the
   SharePoint `webUrl` as the download.
 

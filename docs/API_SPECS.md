@@ -25,7 +25,7 @@ All errors return JSON `{ "error": "<message>" }`.
   "sourceRecordId": "e5f6…",      // lowercase GUID ("" if none)
   "contactId": "a1b2…",           // lowercase GUID
   "uploadDate": "2022-03-11T10:00:00Z", // driveItem createdDateTime
-  "webUrl": "https://contoso.sharepoint.com/…",
+  "webUrl": "https://contoso.sharepoint.com/…",   // passed through assertTrustedUrl; "" if not trusted
   "size": 402000,
   "fileType": "pdf"
 }

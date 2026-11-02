@@ -30,3 +30,19 @@ export function formatDate(iso: string): string {
     const d = new Date(iso);
     return isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
 }
+
+/**
+ * Copies text with the async Clipboard API. Returns false when the browser refuses (no permission,
+ * not a secure context, or no user gesture); callers then show the text for manual copying.
+ */
+export async function copyText(text: string): Promise<boolean> {
+    try {
+        if (window.isSecureContext && navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch {
+        /* fall through to manual copy */
+    }
+    return false;
+}

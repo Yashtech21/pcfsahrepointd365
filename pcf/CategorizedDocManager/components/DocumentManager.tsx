@@ -14,6 +14,7 @@ import { DocumentCard } from "./DocumentCard";
 import { PreviewPane } from "./PreviewPane";
 import { SkeletonCards } from "./SkeletonCards";
 import { DeleteDialog } from "./DeleteDialog";
+import { CopyLinkDialog } from "./CopyLinkDialog";
 
 const useStyles = makeStyles({
     root: {
@@ -100,6 +101,7 @@ export const DocumentManager = React.memo(function DocumentManager(
     const [preview, setPreview] = React.useState<IPreviewState | null>(null);
     const [toDelete, setToDelete] = React.useState<IDocumentItem | null>(null);
     const [deleting, setDeleting] = React.useState(false);
+    const [copyFallback, setCopyFallback] = React.useState<IDocumentItem | null>(null);
     const [displayNames, setDisplayNames] = React.useState<Record<string, string>>({});
     const [uploadProgress, setUploadProgress] = React.useState<IUploadProgress | null>(null);
     const [newIds, setNewIds] = React.useState<ReadonlySet<string>>(() => new Set());
@@ -304,6 +306,8 @@ export const DocumentManager = React.memo(function DocumentManager(
     const onDeleteCard = React.useCallback((d: IDocumentItem) => setToDelete(d), []);
     const closePreview = React.useCallback(() => setPreview(null), []);
     const cancelDelete = React.useCallback(() => setToDelete(null), []);
+    const onCopyFailed = React.useCallback((d: IDocumentItem) => setCopyFallback(d), []);
+    const closeCopyFallback = React.useCallback(() => setCopyFallback(null), []);
 
     const confirmDelete = React.useCallback(async (doc: IDocumentItem) => {
         if (!api || deleting) return;
@@ -429,7 +433,8 @@ export const DocumentManager = React.memo(function DocumentManager(
                                               isNew={newIds.has(d.id)}
                                               onPreview={onPreviewCard}
                                               onDownload={onDownloadCard}
-                                              onDelete={onDeleteCard} />
+                                              onDelete={onDeleteCard}
+                                              onCopyFailed={onCopyFailed} />
                             ))}
                         </div>
                     )}
@@ -443,9 +448,12 @@ export const DocumentManager = React.memo(function DocumentManager(
                 </div>
 
                 {preview && (
-                    <PreviewPane doc={preview.doc} target={preview.target} error={preview.error} onClose={closePreview} />
+                    <PreviewPane doc={preview.doc} target={preview.target} error={preview.error} onClose={closePreview}
+                                 onCopyFailed={onCopyFailed} />
                 )}
             </div>
+
+            <CopyLinkDialog doc={copyFallback} onClose={closeCopyFallback} />
 
             <DeleteDialog
                 doc={toDelete}

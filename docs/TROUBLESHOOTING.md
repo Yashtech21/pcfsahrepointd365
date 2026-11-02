@@ -182,3 +182,16 @@ Don't "fix" them by undoing the documented workaround.
 36. **`403 This document isn't linked to a contact`**
     - The file has no `ContactGuid` (e.g. uploaded straight into SharePoint). Fill in its four columns.
 
+## Copy link
+
+37. **Someone opens a copied link and gets "Access denied" in SharePoint**
+    - Expected: the link is the file's plain SharePoint URL and grants nothing. The recipient needs Read on the
+      AdvisorManagement site or the file. Copy link deliberately doesn't create sharing links.
+
+38. **"Your browser didn't allow automatic copying" dialog**
+    - The browser blocked the Clipboard API (policy, permissions or an embedded context). Press Ctrl+C (the link is
+      already selected) or use **Try again**.
+
+39. **Copy link button is disabled ("Link not available")**
+    - The backend dropped the file's link because it wasn't an https Microsoft/SharePoint URL (`assertTrustedUrl`).
+

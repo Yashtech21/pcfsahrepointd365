@@ -7,7 +7,8 @@ SharePoint document grid with:
   (Opportunity, Advisor Onboarding, …), instead of one folder per record.
 - **Category picked at upload**, written to SharePoint metadata (`DocCategory`, `SourceEntity`, `SourceRecordId`, `ContactGuid`).
 - **Two views**: *This Record's Documents* and *All Contact Documents* (across all entities).
-- **Inline preview** (Graph `driveItem: preview` embed) and download.
+- **Inline preview** (Graph `driveItem: preview` embed), download, and **Copy link** (copies the file's SharePoint URL;
+  if the browser blocks the clipboard, the link is shown ready to copy).
 - **Delete with explicit confirmation**: a dialog shows the file, category and source, and the user must tick
   "I understand…" before Delete is enabled. The server also requires the confirmed file name
   (`X-Confirm-Delete`) and refuses to delete folders.

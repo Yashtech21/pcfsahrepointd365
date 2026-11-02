@@ -5,6 +5,7 @@ import { IDocumentItem } from "../types";
 import { useCategoryCatalog } from "../categories";
 import { formatDate, formatSize } from "../utils";
 import { FileTypeIcon } from "./FileTypeIcon";
+import { CopyLinkButton } from "./CopyLinkButton";
 
 const useStyles = makeStyles({
     card: { minWidth: "220px", cursor: "default" },
@@ -30,13 +31,14 @@ export interface IDocumentCardProps {
     onPreview: (d: IDocumentItem) => void;
     onDownload: (d: IDocumentItem) => void;
     onDelete: (d: IDocumentItem) => void;
+    onCopyFailed: (d: IDocumentItem) => void;
 }
 
 /**
  * Memoized: with stable callbacks from the parent, toggling the preview or tabs re-renders only the
  * cards whose props changed (e.g. the previously and newly selected card).
  */
-export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel, selected, isNew, onPreview, onDownload, onDelete }: IDocumentCardProps) {
+export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel, selected, isNew, onPreview, onDownload, onDelete, onCopyFailed }: IDocumentCardProps) {
     const s = useStyles();
     const catalog = useCategoryCatalog();
     return (
@@ -63,6 +65,7 @@ export const DocumentCard = React.memo(function DocumentCard({ doc, sourceLabel,
                 <Button className={s.action} size="small" appearance="subtle" icon={<EyeRegular />} onClick={() => onPreview(doc)}>Preview</Button>
                 <Button className={s.action} size="small" appearance="subtle" icon={<ArrowDownloadRegular />} onClick={() => onDownload(doc)}>Download</Button>
                 <Button className={s.action} size="small" appearance="subtle" icon={<DeleteRegular />} onClick={() => onDelete(doc)}>Delete</Button>
+                <CopyLinkButton className={s.action} doc={doc} onCopyFailed={onCopyFailed} />
             </CardFooter>
         </Card>
     );
