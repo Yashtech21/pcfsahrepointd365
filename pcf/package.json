@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "PCF control: categorized SharePoint document manager for Dynamics 365 (Opportunity / Advisor Onboarding)",
+  "license": "MIT",
   "scripts": {
     "build": "pcf-scripts build",
     "build:prod": "pcf-scripts build --buildMode production",

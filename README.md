@@ -87,3 +87,10 @@ cd backend && cp local.settings.sample.json local.settings.json && npm start   #
 ```
 
 See **[docs/PREREQUISITES.md](docs/PREREQUISITES.md)** first, then **[docs/SETUP.md](docs/SETUP.md)**.
+
+## License
+
+[MIT](LICENSE) © 2026 Yashtech21.
+
+Third-party notice: the SVG icon paths in `pcf/CategorizedDocManager/components/Icons.tsx` are copied from
+[`@fluentui/react-icons`](https://github.com/microsoft/fluentui-system-icons) (MIT License, © Microsoft Corporation).
